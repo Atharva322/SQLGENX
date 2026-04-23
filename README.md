@@ -1,70 +1,69 @@
-# GENXSQL
+﻿# Text-to-SQL Interface with Guardrails and Hallucination Detection
 
-Enterprise NL-to-SQL assistant for MySQL using Next.js + OpenAI, with review-before-run workflow and read-only safety guardrails.
+Production-style scaffold for a natural-language-to-SQL system with safety controls, hallucination detection signals, and a query UI.
 
-## Features
+## Quickstart
 
-- Plain-English to SQL generation (`POST /api/chat/generate-sql`)
-- Read-only SQL validation (SELECT/CTE only, no DML/DDL, no multi-statement/comments)
-- Manual execution approval (`POST /api/chat/execute-sql`)
-- Schema introspection and caching from `INFORMATION_SCHEMA`
-- Query history/audit trail per conversation
-- Chat UI with SQL preview, safety warnings, pagination, and CSV export
-- Cognito JWT-based SSO support (plus optional local dev bypass)
-
-## Quick Start
-
-1. Install dependencies:
+1. Create and activate a Python 3.11 virtual environment.
+2. Install dependencies:
 
 ```bash
-npm install
+pip install -r requirements.txt
 ```
 
-2. Copy env template and set values:
+3. Copy env template and set keys:
 
 ```bash
 cp .env.example .env.local
 ```
 
-3. Start dev server:
+4. Run API locally:
 
 ```bash
-npm run dev
+uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-4. Open `http://localhost:3000`.
+5. Run Streamlit frontend locally:
+
+```bash
+streamlit run frontend/app.py --server.port=8501
+```
+
+## Docker Compose
+
+```bash
+docker compose up --build
+```
+
+Services:
+- API: `http://localhost:8000`
+- Frontend: `http://localhost:8501`
+- Postgres: `localhost:5432`
 
 ## API Endpoints
 
-- `POST /api/chat/generate-sql`
-- `POST /api/chat/execute-sql`
-- `GET /api/schema/context`
-- `POST /api/schema/refresh`
-- `GET /api/history/:conversationId`
+- `GET /health`
+- `POST /v1/query`
+- `GET /v1/schema`
+- `GET /v1/history`
 
-## Security Notes
+## Architecture (Scaffold)
 
-- Use a read-only MySQL account in production.
-- Keep `AUTH_DEV_BYPASS=false` outside local development.
-- Map Cognito groups to roles:
-  - `genxsql-admin` -> `admin`
-  - `genxsql-viewer` -> `viewer`
-  - default -> `analyst`
+- `src/services/prompt_builder.py`: schema-aware prompt assembly and lightweight filtering stub.
+- `src/guardrails/rules.py`: DDL/DML blocking, LIMIT enforcement, subquery-depth rule, explain threshold hook.
+- `src/validation/*`: alignment, sanity, and multi-query agreement score stubs.
+- `src/services/query_service.py`: orchestration pipeline for generate -> guardrail -> execute -> score.
 
 ## Testing
 
 ```bash
-npm test
+pytest -q
 ```
 
-```bash
-npm run test:e2e
-```
+## Next-Phase Checklist
 
-## AWS Deployment (Suggested)
-
-- Host Next.js on ECS Fargate, App Runner, or Amplify Hosting.
-- Store secrets in AWS Secrets Manager.
-- Put app behind ALB + WAF.
-- Use Amazon Cognito with SAML/OIDC federation to enterprise IdP.
-- Point app to private MySQL endpoint with security group restrictions.
+- Wire provider-specific structured output with Instructor for OpenAI/Anthropic.
+- Add embedding-based schema filtering and ambiguity clarification flow.
+- Add robust SQL parsing and explain-plan row-estimation extraction.
+- Implement dual-query generation and result agreement analysis.
+- Expand eval suite to 50+ golden cases and publish metrics.

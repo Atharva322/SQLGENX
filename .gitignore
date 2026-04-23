@@ -1,6 +1,34 @@
-.next/
+﻿# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environments
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# Runtime
+logs/
+*.log
+
+# Data and artifacts
+*.sqlite
+*.db
+coverage.xml
+htmlcov/
+
+# OS and editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Node leftovers (if any)
 node_modules/
-.env.local
-coverage/
-playwright-report/
-test-results/

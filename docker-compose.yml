@@ -1,0 +1,58 @@
+﻿version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: text2sql-db
+    environment:
+      POSTGRES_USER: text2sql_user
+      POSTGRES_PASSWORD: text2sql_pass
+      POSTGRES_DB: sample_company
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U text2sql_user"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: text2sql-api
+    environment:
+      - DATABASE_URL=postgresql://text2sql_user:text2sql_pass@postgres:5432/sample_company
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - LLM_PROVIDER=${LLM_PROVIDER:-anthropic}
+      - LLM_MODEL=${LLM_MODEL:-claude-sonnet-4-20250514}
+      - MAX_RESULT_ROWS=${MAX_RESULT_ROWS:-1000}
+      - MAX_SUBQUERY_DEPTH=${MAX_SUBQUERY_DEPTH:-3}
+      - MAX_EXPLAIN_ROWS=${MAX_EXPLAIN_ROWS:-1000000}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    container_name: text2sql-frontend
+    environment:
+      - API_URL=http://api:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:

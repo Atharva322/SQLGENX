@@ -1,0 +1,17 @@
+﻿{
+  "business_glossary": {
+    "revenue": "Sum of sales.amount",
+    "headcount": "Count of active employees",
+    "average_salary": "Average of employees.salary"
+  },
+  "few_shot_examples": [
+    {
+      "question": "What is total revenue by region?",
+      "sql": "SELECT region, SUM(amount) AS total_revenue FROM sales GROUP BY region ORDER BY total_revenue DESC;"
+    },
+    {
+      "question": "How many employees are in each department?",
+      "sql": "SELECT d.name, COUNT(*) AS employee_count FROM employees e JOIN departments d ON d.id = e.department_id GROUP BY d.name ORDER BY employee_count DESC;"
+    }
+  ]
+}
