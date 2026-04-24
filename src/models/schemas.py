@@ -1,5 +1,5 @@
-﻿from pydantic import BaseModel, Field
-from typing import Any
+from pydantic import BaseModel, Field
+from typing import Any, Literal
 
 
 class QueryOptions(BaseModel):
@@ -10,6 +10,9 @@ class QueryOptions(BaseModel):
 class QueryRequest(BaseModel):
     question: str = Field(min_length=3, description="Natural language question")
     session_id: str | None = None
+    sql_override: str | None = Field(
+        default=None, description="Optional user-edited SQL to execute instead of generated SQL."
+    )
     options: QueryOptions | None = None
 
 
@@ -27,9 +30,17 @@ class ExecutionMeta(BaseModel):
     explain_plan: list[str] = Field(default_factory=list)
 
 
+class AccessedSchema(BaseModel):
+    tables: list[str] = Field(default_factory=list)
+    columns: list[str] = Field(default_factory=list)
+
+
 class QueryResponse(BaseModel):
+    query_id: str
+    session_id: str
     sql: str
     explanation: str
+    accessed: AccessedSchema = Field(default_factory=AccessedSchema)
     results: list[dict[str, Any]] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
     signals: ConfidenceSignals
@@ -41,11 +52,37 @@ class SchemaResponse(BaseModel):
     tables: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class FeedbackPayload(BaseModel):
+    verdict: Literal["correct", "incorrect"]
+    notes: str | None = None
+
+
 class HistoryItem(BaseModel):
+    query_id: str
+    session_id: str
     question: str
     sql: str
+    explanation: str
     confidence: float
+    signals: ConfidenceSignals
+    warnings: list[str] = Field(default_factory=list)
+    results: list[dict[str, Any]] = Field(default_factory=list)
+    execution_meta: ExecutionMeta
+    feedback: FeedbackPayload | None = None
 
 
 class HistoryResponse(BaseModel):
     items: list[HistoryItem] = Field(default_factory=list)
+
+
+class FeedbackRequest(BaseModel):
+    query_id: str = Field(min_length=3)
+    session_id: str | None = None
+    verdict: Literal["correct", "incorrect"]
+    notes: str | None = None
+
+
+class FeedbackResponse(BaseModel):
+    query_id: str
+    stored: bool
+    target_file: str

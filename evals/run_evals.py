@@ -1,0 +1,113 @@
+import json
+from pathlib import Path
+from typing import Any
+import sys
+
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.db.engine import SessionLocal
+from src.services.query_service import QueryService
+
+
+def _normalize_sql(sql: str) -> str:
+    return " ".join(sql.strip().strip(";").lower().split())
+
+
+def _normalize_rows(rows: list[dict[str, Any]]) -> list[str]:
+    return sorted(json.dumps(row, sort_keys=True, default=str) for row in rows)
+
+
+def _run_sql(sql: str) -> list[dict[str, Any]]:
+    with SessionLocal() as session:
+        session.execute(text("SET TRANSACTION READ ONLY"))
+        result = session.execute(text(sql))
+        keys = list(result.keys())
+        rows = [dict(zip(keys, row)) for row in result.fetchall()]
+        session.rollback()
+    return rows
+
+
+def _is_flagged_hallucination(response: dict[str, Any]) -> bool:
+    warnings = " ".join(response.get("warnings", [])).lower()
+    return "alignment" in warnings or "diverged" in warnings or "hallucination" in warnings
+
+
+def run_eval_suite(dataset_path: Path) -> dict[str, Any]:
+    service = QueryService()
+    cases = [
+        json.loads(line)
+        for line in dataset_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+    total = len(cases)
+    if total == 0:
+        return {"total": 0}
+
+    exact_match_hits = 0
+    execution_match_hits = 0
+    hallucination_eval_cases = 0
+    hallucination_hits = 0
+    guardrail_eval_cases = 0
+    guardrail_hits = 0
+
+    for case in cases:
+        response_model = service.process_question(
+            question=case["question"], session_id="eval_suite", row_limit_override=1000
+        )
+        response = response_model.model_dump()
+        generated_sql = response["sql"]
+        expected_sql = case.get("expected_sql", "")
+
+        if expected_sql and expected_sql != "UNANSWERABLE":
+            if _normalize_sql(generated_sql) == _normalize_sql(expected_sql):
+                exact_match_hits += 1
+
+        if expected_sql and expected_sql not in {"UNANSWERABLE", "BLOCKED"}:
+            try:
+                expected_rows = _run_sql(expected_sql)
+                got_rows = response.get("results", [])
+                if _normalize_rows(expected_rows) == _normalize_rows(got_rows):
+                    execution_match_hits += 1
+            except SQLAlchemyError:
+                pass
+
+        if case.get("expect_hallucination_flag") is not None:
+            hallucination_eval_cases += 1
+            flagged = _is_flagged_hallucination(response)
+            if bool(case["expect_hallucination_flag"]) == flagged:
+                hallucination_hits += 1
+
+        if case.get("expect_guardrail_block") is not None:
+            guardrail_eval_cases += 1
+            blocked = any("blocked" in warning.lower() for warning in response.get("warnings", []))
+            if bool(case["expect_guardrail_block"]) == blocked:
+                guardrail_hits += 1
+
+    exact_match = round(exact_match_hits / total, 3)
+    execution_match = round(execution_match_hits / total, 3)
+    hallucination_detection = round(
+        hallucination_hits / max(1, hallucination_eval_cases), 3
+    )
+    guardrail_effectiveness = round(guardrail_hits / max(1, guardrail_eval_cases), 3)
+
+    return {
+        "total_cases": total,
+        "sql_exact_match": exact_match,
+        "execution_match": execution_match,
+        "hallucination_detection_rate": hallucination_detection,
+        "guardrail_effectiveness": guardrail_effectiveness,
+        "hallucination_eval_cases": hallucination_eval_cases,
+        "guardrail_eval_cases": guardrail_eval_cases,
+    }
+
+
+if __name__ == "__main__":
+    dataset = Path("evals") / "golden_queries.jsonl"
+    output = run_eval_suite(dataset)
+    print(json.dumps(output, indent=2))
