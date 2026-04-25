@@ -2,6 +2,7 @@ from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
 import json
+from typing import Any
 
 import pandas as pd
 from sqlalchemy import text
@@ -24,6 +25,7 @@ from src.models.schemas import (
     FeedbackResponse,
     HistoryItem,
     QueryResponse,
+    ReasoningMeta,
 )
 from src.services.prompt_builder import build_prompt
 from src.utils.audit import log_blocked_query, log_execution_event
@@ -57,6 +59,84 @@ class QueryService:
 
     def get_connections(self) -> dict[str, str]:
         return available_connections()
+
+    def _sum_token_usage(self, usages: list[dict[str, Any]]) -> dict[str, Any]:
+        total_prompt = 0
+        total_completion = 0
+        total = 0
+        provider = ""
+        model = ""
+        for usage in usages:
+            total_prompt += int(usage.get("prompt_tokens", 0) or 0)
+            total_completion += int(usage.get("completion_tokens", 0) or 0)
+            total += int(usage.get("total_tokens", 0) or 0)
+            provider = str(usage.get("provider", provider))
+            model = str(usage.get("model", model))
+        return {
+            "provider": provider,
+            "model": model,
+            "prompt_tokens": total_prompt,
+            "completion_tokens": total_completion,
+            "total_tokens": total,
+            "calls": len(usages),
+        }
+
+    def _select_candidate_with_validator(
+        self,
+        question: str,
+        prompt: str,
+        candidates: list[tuple[str, GeneratedSQL]],
+        max_rows: int,
+    ) -> tuple[str, GeneratedSQL, list[dict[str, Any]], list[str]]:
+        scored: list[dict[str, Any]] = []
+        notes: list[str] = []
+        for label, candidate in candidates:
+            pre_guardrail = apply_guardrails(
+                sql=candidate.sql,
+                max_rows=max_rows,
+                max_subquery_depth=self.settings.max_subquery_depth,
+                explain_estimated_rows=None,
+                explain_row_limit=self.settings.max_explain_rows,
+            )
+            back_q = self.llm.back_translate_sql(
+                sql=pre_guardrail.sql if pre_guardrail.allowed else candidate.sql,
+                prompt_context=prompt,
+            )
+            alignment = verify_sql_alignment(
+                original_question=question, back_translated_question=back_q
+            )
+            safety_score = 1.0 if pre_guardrail.allowed else 0.0
+            score = round((0.6 * alignment.score) + (0.4 * safety_score), 3)
+            scored.append(
+                {
+                    "candidate": label,
+                    "score": score,
+                    "alignment_score": alignment.score,
+                    "safety_score": safety_score,
+                    "allowed": pre_guardrail.allowed,
+                    "sql_preview": pre_guardrail.sql[:180],
+                }
+            )
+
+        scored.sort(key=lambda item: item["score"], reverse=True)
+        winner = scored[0]["candidate"] if scored else "primary"
+        notes.append(
+            "Validator compared multiple SQL candidates using safety + alignment heuristics."
+        )
+        selected = next((c for c in candidates if c[0] == winner), candidates[0])
+        return selected[0], selected[1], scored, notes
+
+    def _classify_failure(self, warnings: list[str], rows: list[dict], sql: str) -> str:
+        joined = " ".join(warnings).lower()
+        if "blocked" in joined or "malicious" in joined or "destructive" in joined:
+            return "guardrail_block"
+        if sql.strip().upper() == "UNANSWERABLE":
+            return "unanswerable"
+        if any("error" in row for row in rows):
+            return "execution_error"
+        if "low sql-to-question alignment" in joined or "hallucination" in joined:
+            return "hallucination_risk"
+        return "none"
 
     def _run_explain(self, sql: str, connection_id: str) -> list[str]:
         SessionLocal = get_session_factory(connection_id)
@@ -142,6 +222,9 @@ class QueryService:
         rows: list[dict],
         explain: list[str],
         elapsed_ms: int,
+        stage_latencies_ms: dict[str, int] | None = None,
+        llm_token_usage: dict[str, Any] | None = None,
+        reasoning: ReasoningMeta | None = None,
     ) -> QueryResponse:
         prompt = build_prompt(question, connection_id=connection_id)
         back_translated_question = self.llm.back_translate_sql(
@@ -236,7 +319,11 @@ class QueryService:
                 execution_time_ms=elapsed_ms,
                 rows_returned=len(rows),
                 explain_plan=explain,
+                stage_latencies_ms=stage_latencies_ms or {},
+                llm_token_usage=llm_token_usage or {},
+                failure_classification=self._classify_failure(warnings, rows, guarded_sql),
             ),
+            reasoning=reasoning or ReasoningMeta(),
         )
 
     def process_question(
@@ -247,22 +334,58 @@ class QueryService:
         row_limit_override: int | None = None,
         sql_override: str | None = None,
     ) -> QueryResponse:
+        started_at = perf_counter()
+        stage_latencies_ms: dict[str, int] = {}
         max_rows = row_limit_override or self.settings.max_result_rows
         resolved_session_id = self._normalize_session_id(session_id)
         resolved_connection_id = self._normalize_connection_id(connection_id)
         query_id = self._new_query_id()
+        t_prompt = perf_counter()
         prompt = build_prompt(question, connection_id=resolved_connection_id)
+        stage_latencies_ms["prompt_build_ms"] = int((perf_counter() - t_prompt) * 1000)
 
-        generated = (
-            GeneratedSQL(
+        reasoning = ReasoningMeta()
+        llm_usages: list[dict[str, Any]] = []
+        t_generation = perf_counter()
+        if sql_override:
+            generated = GeneratedSQL(
                 sql=sql_override or "",
                 explanation="User-edited SQL executed with guardrails.",
                 accessed_tables=[],
                 accessed_columns=[],
                 model_confidence=0.6,
+                token_usage={
+                    "provider": "user",
+                    "model": "manual_override",
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                },
             )
-            if sql_override
-            else self.llm.generate_structured_sql(question=question, prompt_context=prompt)
+            reasoning.strategy = "manual_override"
+            reasoning.selected_candidate = "user_sql_override"
+        else:
+            primary = self.llm.generate_structured_sql(question=question, prompt_context=prompt)
+            alternative = self.llm.generate_alternative_sql(
+                question=question, prompt_context=prompt, primary_sql=primary.sql
+            )
+            llm_usages.extend([primary.token_usage, alternative.token_usage])
+            selected_name, generated, candidate_scores, validator_notes = (
+                self._select_candidate_with_validator(
+                    question=question,
+                    prompt=prompt,
+                    candidates=[("primary", primary), ("alternative", alternative)],
+                    max_rows=max_rows,
+                )
+            )
+            reasoning = ReasoningMeta(
+                strategy="planner_validator_selection",
+                selected_candidate=selected_name,
+                candidate_scores=candidate_scores,
+                validator_notes=validator_notes,
+            )
+        stage_latencies_ms["generation_and_selection_ms"] = int(
+            (perf_counter() - t_generation) * 1000
         )
 
         intent_reasons = detect_malicious_prompt_intent(question)
@@ -283,6 +406,9 @@ class QueryService:
                 rows=[],
                 explain=[],
                 elapsed_ms=0,
+                stage_latencies_ms=stage_latencies_ms,
+                llm_token_usage=self._sum_token_usage(llm_usages),
+                reasoning=reasoning,
             )
             self.history.append(
                 HistoryItem(
@@ -297,6 +423,7 @@ class QueryService:
                     warnings=response.warnings,
                     results=response.results,
                     execution_meta=response.execution_meta,
+                    reasoning=response.reasoning,
                     feedback=None,
                 )
             )
@@ -320,6 +447,9 @@ class QueryService:
                 rows=[],
                 explain=[],
                 elapsed_ms=0,
+                stage_latencies_ms=stage_latencies_ms,
+                llm_token_usage=self._sum_token_usage(llm_usages),
+                reasoning=reasoning,
             )
             self.history.append(
                 HistoryItem(
@@ -334,6 +464,7 @@ class QueryService:
                     warnings=response.warnings,
                     results=response.results,
                     execution_meta=response.execution_meta,
+                    reasoning=response.reasoning,
                     feedback=None,
                 )
             )
@@ -356,8 +487,10 @@ class QueryService:
 
         if initial_guardrail.allowed:
             try:
+                t_explain = perf_counter()
                 explain = self._run_explain(guarded_sql, connection_id=resolved_connection_id)
                 estimated_rows = parse_explain_total_rows(explain)
+                stage_latencies_ms["explain_ms"] = int((perf_counter() - t_explain) * 1000)
             except SQLAlchemyError as exc:
                 warnings.append(f"EXPLAIN failed: {exc}")
 
@@ -377,6 +510,7 @@ class QueryService:
                     connection_id=resolved_connection_id,
                     precomputed_explain=explain,
                 )
+                stage_latencies_ms["execute_ms"] = elapsed_ms
                 log_execution_event(
                     "query_executed",
                     {
@@ -388,6 +522,8 @@ class QueryService:
                         "rows_returned": len(rows),
                         "execution_time_ms": elapsed_ms,
                         "estimated_rows": estimated_rows,
+                        "stage_latencies_ms": stage_latencies_ms,
+                        "llm_token_usage": self._sum_token_usage(llm_usages),
                     },
                 )
             else:
@@ -411,6 +547,24 @@ class QueryService:
             rows=rows,
             explain=explain,
             elapsed_ms=elapsed_ms,
+            stage_latencies_ms=stage_latencies_ms,
+            llm_token_usage=self._sum_token_usage(llm_usages),
+            reasoning=reasoning,
+        )
+        response.execution_meta.stage_latencies_ms["total_pipeline_ms"] = int(
+            (perf_counter() - started_at) * 1000
+        )
+        log_execution_event(
+            "query_outcome",
+            {
+                "query_id": query_id,
+                "connection_id": resolved_connection_id,
+                "failure_classification": response.execution_meta.failure_classification,
+                "reasoning_strategy": response.reasoning.strategy,
+                "selected_candidate": response.reasoning.selected_candidate,
+                "llm_token_usage": response.execution_meta.llm_token_usage,
+                "stage_latencies_ms": response.execution_meta.stage_latencies_ms,
+            },
         )
 
         self.history.append(
@@ -426,6 +580,7 @@ class QueryService:
                 warnings=response.warnings,
                 results=response.results,
                 execution_meta=response.execution_meta,
+                reasoning=response.reasoning,
                 feedback=None,
             )
         )

@@ -16,6 +16,7 @@ class GeneratedSQL:
     accessed_tables: list[str]
     accessed_columns: list[str]
     model_confidence: float
+    token_usage: dict[str, int | str]
 
 
 class StructuredSQLResponse(BaseModel):
@@ -60,7 +61,16 @@ class LLMClient:
             ],
         )
         raw = response.choices[0].message.content or "{}"
-        return json.loads(raw)
+        parsed = json.loads(raw)
+        usage = getattr(response, "usage", None)
+        parsed["_meta"] = {
+            "provider": "openai",
+            "model": self.settings.llm_model or "gpt-4o-mini",
+            "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
+            "completion_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+            "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
+        }
+        return parsed
 
     def _json_chat_anthropic(self, system: str, user: str) -> dict:
         client = Anthropic(api_key=self.settings.anthropic_api_key)
@@ -73,7 +83,18 @@ class LLMClient:
         )
         parts = [part.text for part in message.content if getattr(part, "type", "") == "text"]
         raw = "".join(parts).strip() or "{}"
-        return json.loads(raw)
+        parsed = json.loads(raw)
+        usage = getattr(message, "usage", None)
+        input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+        output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+        parsed["_meta"] = {
+            "provider": "anthropic",
+            "model": self.settings.llm_model or "claude-3-5-sonnet-latest",
+            "prompt_tokens": input_tokens,
+            "completion_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+        }
+        return parsed
 
     def _text_chat_openai(self, system: str, user: str) -> str:
         client = OpenAI(api_key=self.settings.openai_api_key)
@@ -122,12 +143,21 @@ class LLMClient:
 
     def generate_structured_sql(self, question: str, prompt_context: str) -> GeneratedSQL:
         response: StructuredSQLResponse
+        meta: dict[str, int | str] = {
+            "provider": self._provider() or "none",
+            "model": self.settings.llm_model or "",
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
         try:
             if self._is_openai_enabled():
                 parsed = self._json_chat_openai(self._system_prompt(), self._user_prompt(question, prompt_context))
+                meta = parsed.pop("_meta", meta)
                 response = StructuredSQLResponse.model_validate(parsed)
             elif self._is_anthropic_enabled():
                 parsed = self._json_chat_anthropic(self._system_prompt(), self._user_prompt(question, prompt_context))
+                meta = parsed.pop("_meta", meta)
                 response = StructuredSQLResponse.model_validate(parsed)
             else:
                 response = self._placeholder()
@@ -140,6 +170,7 @@ class LLMClient:
             accessed_tables=response.tables_accessed,
             accessed_columns=response.columns_accessed,
             model_confidence=response.confidence,
+            token_usage=meta,
         )
 
     def back_translate_sql(self, sql: str, prompt_context: str = "") -> str:
@@ -176,6 +207,16 @@ class LLMClient:
         try:
             if self._is_openai_enabled():
                 parsed = self._json_chat_openai(self._system_prompt(), variation_prompt)
+                meta = parsed.pop(
+                    "_meta",
+                    {
+                        "provider": "openai",
+                        "model": self.settings.llm_model or "gpt-4o-mini",
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "total_tokens": 0,
+                    },
+                )
                 response = StructuredSQLResponse.model_validate(parsed)
                 return GeneratedSQL(
                     sql=response.sql.strip(),
@@ -183,9 +224,20 @@ class LLMClient:
                     accessed_tables=response.tables_accessed,
                     accessed_columns=response.columns_accessed,
                     model_confidence=response.confidence,
+                    token_usage=meta,
                 )
             if self._is_anthropic_enabled():
                 parsed = self._json_chat_anthropic(self._system_prompt(), variation_prompt)
+                meta = parsed.pop(
+                    "_meta",
+                    {
+                        "provider": "anthropic",
+                        "model": self.settings.llm_model or "claude-3-5-sonnet-latest",
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "total_tokens": 0,
+                    },
+                )
                 response = StructuredSQLResponse.model_validate(parsed)
                 return GeneratedSQL(
                     sql=response.sql.strip(),
@@ -193,6 +245,7 @@ class LLMClient:
                     accessed_tables=response.tables_accessed,
                     accessed_columns=response.columns_accessed,
                     model_confidence=response.confidence,
+                    token_usage=meta,
                 )
         except (ValidationError, json.JSONDecodeError, Exception):
             pass
@@ -202,6 +255,13 @@ class LLMClient:
             accessed_tables=[],
             accessed_columns=[],
             model_confidence=0.4,
+            token_usage={
+                "provider": self._provider() or "none",
+                "model": self.settings.llm_model or "",
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            },
         )
 
     def _heuristic_back_translation(self, sql: str) -> str:

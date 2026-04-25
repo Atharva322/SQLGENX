@@ -29,6 +29,16 @@ class ExecutionMeta(BaseModel):
     execution_time_ms: int = 0
     rows_returned: int = 0
     explain_plan: list[str] = Field(default_factory=list)
+    stage_latencies_ms: dict[str, int] = Field(default_factory=dict)
+    llm_token_usage: dict[str, Any] = Field(default_factory=dict)
+    failure_classification: str | None = None
+
+
+class ReasoningMeta(BaseModel):
+    strategy: str = "single_pass"
+    selected_candidate: str = "primary"
+    candidate_scores: list[dict[str, Any]] = Field(default_factory=list)
+    validator_notes: list[str] = Field(default_factory=list)
 
 
 class AccessedSchema(BaseModel):
@@ -48,6 +58,7 @@ class QueryResponse(BaseModel):
     signals: ConfidenceSignals
     warnings: list[str] = Field(default_factory=list)
     execution_meta: ExecutionMeta
+    reasoning: ReasoningMeta = Field(default_factory=ReasoningMeta)
 
 
 class SchemaResponse(BaseModel):
@@ -71,6 +82,7 @@ class HistoryItem(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     results: list[dict[str, Any]] = Field(default_factory=list)
     execution_meta: ExecutionMeta
+    reasoning: ReasoningMeta = Field(default_factory=ReasoningMeta)
     feedback: FeedbackPayload | None = None
 
 

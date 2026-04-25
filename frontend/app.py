@@ -104,6 +104,52 @@ if payload:
         st.metric("Overall", f"{payload.get('confidence', 0):.2f}")
         st.json(payload.get("signals", {}))
 
+    with st.expander("Observability (Optional)", expanded=False):
+        if st.checkbox(
+            "Show per-request latency/token breakdown",
+            value=False,
+            key="show_observability_panel",
+            help="Displays observability for the latest response only; not persisted to history.",
+        ):
+            execution_meta = payload.get("execution_meta", {}) or {}
+            reasoning = payload.get("reasoning", {}) or {}
+            token_usage = execution_meta.get("llm_token_usage", {}) or {}
+            stage_latencies = execution_meta.get("stage_latencies_ms", {}) or {}
+
+            st.markdown("**LLM Usage**")
+            usage_col1, usage_col2, usage_col3, usage_col4 = st.columns(4)
+            usage_col1.metric("Prompt Tokens", int(token_usage.get("prompt_tokens", 0) or 0))
+            usage_col2.metric(
+                "Completion Tokens", int(token_usage.get("completion_tokens", 0) or 0)
+            )
+            usage_col3.metric("Total Tokens", int(token_usage.get("total_tokens", 0) or 0))
+            usage_col4.metric("LLM Calls", int(token_usage.get("calls", 0) or 0))
+            st.caption(
+                f"Provider: {token_usage.get('provider', 'n/a')} | "
+                f"Model: {token_usage.get('model', 'n/a')}"
+            )
+
+            st.markdown("**Latency Breakdown**")
+            lat_col1, lat_col2, lat_col3 = st.columns(3)
+            lat_col1.metric("Total Pipeline", f"{int(stage_latencies.get('total_pipeline_ms', 0) or 0)} ms")
+            lat_col2.metric(
+                "Generation + Selection",
+                f"{int(stage_latencies.get('generation_and_selection_ms', 0) or 0)} ms",
+            )
+            lat_col3.metric("Execution", f"{int(stage_latencies.get('execute_ms', 0) or 0)} ms")
+
+            st.markdown("**Key Diagnostics**")
+            diag_col1, diag_col2, diag_col3 = st.columns(3)
+            diag_col1.metric(
+                "Failure Class", str(execution_meta.get("failure_classification", "none"))
+            )
+            diag_col2.metric(
+                "Reasoning Strategy", str(reasoning.get("strategy", "single_pass"))
+            )
+            diag_col3.metric(
+                "Selected Candidate", str(reasoning.get("selected_candidate", "primary"))
+            )
+
     st.subheader("Results")
     rows = payload.get("results", [])
     if rows:
