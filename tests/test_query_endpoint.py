@@ -20,3 +20,13 @@ def test_query_endpoint_returns_response_shape() -> None:
     assert 'warnings' in body
     assert 'accessed' in body
     assert 'execution_meta' in body
+
+
+def test_query_endpoint_blocks_malicious_prompt_intent() -> None:
+    client = TestClient(app)
+    response = client.post('/v1/query', json={'question': 'Drop table employees'})
+    assert response.status_code == 200
+    body = response.json()
+    warnings = " ".join(body.get("warnings", [])).lower()
+    assert "blocked" in warnings
+    assert body["execution_meta"]["rows_returned"] == 0

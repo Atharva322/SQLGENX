@@ -10,7 +10,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from src.config.settings import get_settings
 from src.db.engine import SessionLocal
 from src.db.schema_introspector import get_schema_summary
-from src.guardrails.rules import apply_guardrails, parse_explain_total_rows
+from src.guardrails.rules import (
+    apply_guardrails,
+    detect_malicious_prompt_intent,
+    parse_explain_total_rows,
+)
 from src.llm.client import GeneratedSQL, LLMClient
 from src.models.schemas import (
     AccessedSchema,
@@ -231,6 +235,76 @@ class QueryService:
             if sql_override
             else self.llm.generate_structured_sql(question=question, prompt_context=prompt)
         )
+
+        intent_reasons = detect_malicious_prompt_intent(question)
+        if intent_reasons:
+            guarded_sql = generated.sql
+            warnings = intent_reasons + [
+                "Query blocked due to malicious/destructive user intent."
+            ]
+            response = self._build_response(
+                query_id=query_id,
+                session_id=resolved_session_id,
+                question=question,
+                generated=generated,
+                guarded_sql=guarded_sql,
+                syntax_valid=False,
+                warnings=warnings,
+                rows=[],
+                explain=[],
+                elapsed_ms=0,
+            )
+            self.history.append(
+                HistoryItem(
+                    query_id=response.query_id,
+                    session_id=response.session_id,
+                    question=question,
+                    sql=response.sql,
+                    explanation=response.explanation,
+                    confidence=response.confidence,
+                    signals=response.signals,
+                    warnings=response.warnings,
+                    results=response.results,
+                    execution_meta=response.execution_meta,
+                    feedback=None,
+                )
+            )
+            log_blocked_query(question=question, sql=generated.sql, reasons=warnings)
+            return response
+
+        if generated.sql.strip().upper() == "UNANSWERABLE":
+            warnings = [
+                "Model returned UNANSWERABLE for missing schema coverage or ambiguity.",
+                "No SQL executed.",
+            ]
+            response = self._build_response(
+                query_id=query_id,
+                session_id=resolved_session_id,
+                question=question,
+                generated=generated,
+                guarded_sql=generated.sql,
+                syntax_valid=False,
+                warnings=warnings,
+                rows=[],
+                explain=[],
+                elapsed_ms=0,
+            )
+            self.history.append(
+                HistoryItem(
+                    query_id=response.query_id,
+                    session_id=response.session_id,
+                    question=question,
+                    sql=response.sql,
+                    explanation=response.explanation,
+                    confidence=response.confidence,
+                    signals=response.signals,
+                    warnings=response.warnings,
+                    results=response.results,
+                    execution_meta=response.execution_meta,
+                    feedback=None,
+                )
+            )
+            return response
 
         initial_guardrail = apply_guardrails(
             sql=generated.sql,

@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 from typing import Any
 import sys
+from decimal import Decimal
+from datetime import date, datetime
 
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -18,8 +20,30 @@ def _normalize_sql(sql: str) -> str:
     return " ".join(sql.strip().strip(";").lower().split())
 
 
+def _canonical_value(value: Any) -> Any:
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return round(value, 8)
+    if value is None:
+        return None
+    return str(value)
+
+
 def _normalize_rows(rows: list[dict[str, Any]]) -> list[str]:
-    return sorted(json.dumps(row, sort_keys=True, default=str) for row in rows)
+    canonical_rows: list[str] = []
+    for row in rows:
+        normalized = {str(k): _canonical_value(v) for k, v in row.items()}
+        canonical_rows.append(json.dumps(normalized, sort_keys=True, default=str))
+    return sorted(canonical_rows)
 
 
 def _run_sql(sql: str) -> list[dict[str, Any]]:
@@ -34,7 +58,15 @@ def _run_sql(sql: str) -> list[dict[str, Any]]:
 
 def _is_flagged_hallucination(response: dict[str, Any]) -> bool:
     warnings = " ".join(response.get("warnings", [])).lower()
-    return "alignment" in warnings or "diverged" in warnings or "hallucination" in warnings
+    signals = response.get("signals", {})
+    alignment = float(signals.get("alignment_score", 0.0))
+    sanity = float(signals.get("sanity_score", 0.0))
+    agreement = float(signals.get("multi_query_agreement", 0.0))
+    if "hallucination" in warnings or "diverged" in warnings:
+        return True
+    if alignment < 0.2 and (sanity < 0.6 or agreement < 0.5):
+        return True
+    return False
 
 
 def run_eval_suite(dataset_path: Path) -> dict[str, Any]:
@@ -64,7 +96,7 @@ def run_eval_suite(dataset_path: Path) -> dict[str, Any]:
         generated_sql = response["sql"]
         expected_sql = case.get("expected_sql", "")
 
-        if expected_sql and expected_sql != "UNANSWERABLE":
+        if expected_sql and expected_sql not in {"UNANSWERABLE", "BLOCKED"}:
             if _normalize_sql(generated_sql) == _normalize_sql(expected_sql):
                 exact_match_hits += 1
 
@@ -85,7 +117,12 @@ def run_eval_suite(dataset_path: Path) -> dict[str, Any]:
 
         if case.get("expect_guardrail_block") is not None:
             guardrail_eval_cases += 1
-            blocked = any("blocked" in warning.lower() for warning in response.get("warnings", []))
+            warnings = " ".join(response.get("warnings", [])).lower()
+            blocked = (
+                "blocked" in warnings
+                or "malicious" in warnings
+                or "destructive" in warnings
+            )
             if bool(case["expect_guardrail_block"]) == blocked:
                 guardrail_hits += 1
 

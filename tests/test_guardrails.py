@@ -1,4 +1,9 @@
-from src.guardrails.rules import apply_guardrails, enforce_limit, validate_sql_syntax
+from src.guardrails.rules import (
+    apply_guardrails,
+    detect_malicious_prompt_intent,
+    enforce_limit,
+    validate_sql_syntax,
+)
 
 
 def test_blocks_dml_statement() -> None:
@@ -33,3 +38,9 @@ def test_blocks_non_select_statement_syntax() -> None:
     valid, reason = validate_sql_syntax("UPDATE employees SET salary = 0")
     assert not valid
     assert reason is not None
+
+
+def test_detects_malicious_prompt_intent() -> None:
+    reasons = detect_malicious_prompt_intent("Drop table employees now")
+    assert reasons
+    assert any("malicious intent" in reason.lower() for reason in reasons)

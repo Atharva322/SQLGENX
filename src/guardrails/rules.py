@@ -18,6 +18,20 @@ FORBIDDEN_PREFIXES = {
 }
 
 SYNTAX_BLOCK_TYPES = {"UNKNOWN"}
+MALICIOUS_INTENT_PATTERNS = [
+    r"\bdrop\b",
+    r"\bdelete\b",
+    r"\btruncate\b",
+    r"\balter\b",
+    r"\bcreate\b",
+    r"\bgrant\b",
+    r"\brevoke\b",
+    r"\bupdate\b",
+    r"\binsert\b",
+    r"\bremove\b",
+    r"\berase\b",
+    r"\bwipe\b",
+]
 
 
 @dataclass
@@ -40,10 +54,11 @@ def validate_sql_syntax(sql: str) -> tuple[bool, str | None]:
         return False, "Only one statement is allowed."
 
     statement_type = statements[0].get_type().upper()
-    if statement_type in SYNTAX_BLOCK_TYPES:
-        normalized = sql.strip().upper()
-        if not (normalized.startswith("SELECT") or normalized.startswith("WITH")):
+    normalized = sql.strip().upper()
+    if statement_type not in {"SELECT"} and not normalized.startswith("WITH"):
+        if statement_type in SYNTAX_BLOCK_TYPES:
             return False, f"Only SELECT/WITH statements are allowed, got {statement_type}."
+        return False, f"Only SELECT/WITH statements are allowed, got {statement_type}."
     return True, None
 
 
@@ -118,3 +133,12 @@ def apply_guardrails(
         reasons=reasons,
         syntax_valid=syntax_valid,
     )
+
+
+def detect_malicious_prompt_intent(question: str) -> list[str]:
+    lowered = question.lower()
+    reasons: list[str] = []
+    for pattern in MALICIOUS_INTENT_PATTERNS:
+        if re.search(pattern, lowered):
+            reasons.append(f"Blocked malicious intent in question: matched '{pattern}'.")
+    return reasons

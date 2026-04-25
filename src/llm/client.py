@@ -42,6 +42,8 @@ class LLMClient:
         return (
             f"Question: {question}\n\n"
             f"{prompt_context}\n\n"
+            "If the schema cannot answer the question, set sql to UNANSWERABLE.\n"
+            "If the question is ambiguous, set sql to UNANSWERABLE and explain ambiguity.\n"
             "Return valid JSON with keys: "
             "sql, explanation, confidence, tables_accessed, columns_accessed."
         )
