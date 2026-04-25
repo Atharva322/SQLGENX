@@ -9,7 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from src.config.settings import get_settings
 from src.db.engine import available_connections, get_session_factory
-from src.db.schema_introspector import get_schema_summary
+from src.db.schema_introspector import compute_schema_fingerprint, get_schema_summary
 from src.guardrails.rules import (
     apply_guardrails,
     detect_malicious_prompt_intent,
@@ -471,6 +471,10 @@ class QueryService:
             "signals": target.signals.model_dump(),
             "warnings": target.warnings,
         }
+        schema_summary = get_schema_summary(connection_id=target.connection_id)
+        payload["schema_fingerprint"] = schema_summary.get(
+            "schema_fingerprint", compute_schema_fingerprint(schema_summary)
+        )
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload) + "\n")
 
