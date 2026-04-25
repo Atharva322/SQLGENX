@@ -10,8 +10,9 @@ Latest Eval Snapshot (run pending local dependency setup):
 - API endpoints:
   - `POST /v1/query`: accepts natural language question, returns SQL, execution results, confidence, warnings.
   - `GET /v1/schema`: returns introspected database schema.
-  - `GET /v1/history?session_id=...`: returns session query history with results and feedback.
-  - `POST /v1/feedback`: stores correct/incorrect user feedback.
+- `GET /v1/history?session_id=...`: returns session query history with results and feedback.
+- `POST /v1/feedback`: stores correct/incorrect user feedback.
+- `GET /v1/connections`: lists available `connection_id -> database_url` mappings.
 - Frontend (Streamlit):
   - natural language input
   - generated SQL with syntax highlighting
@@ -64,6 +65,17 @@ Services:
 - API: `http://localhost:8000`
 - Frontend: `http://localhost:8501`
 - Postgres: `localhost:5432`
+
+## Multi-Database Connection Selector
+
+Configure one default DB and optional named connections in `.env.local`:
+
+```env
+DATABASE_URL=postgresql://text2sql_user:text2sql_pass@localhost:5432/sample_company
+CONNECTION_URLS_JSON={"default":"postgresql://text2sql_user:text2sql_pass@localhost:5432/sample_company","docker_internal":"postgresql://text2sql_user:text2sql_pass@postgres:5432/sample_company"}
+```
+
+The UI reads `/v1/connections` and lets you switch by `connection_id` without editing env per query.
 
 ## Evaluation Suite
 

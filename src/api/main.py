@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Query
 
 from src.db.schema_introspector import get_schema_summary
 from src.models.schemas import (
+    ConnectionsResponse,
     FeedbackRequest,
     FeedbackResponse,
     HistoryResponse,
@@ -25,6 +26,7 @@ def query(payload: QueryRequest) -> QueryResponse:
     row_limit = payload.options.row_limit if payload.options else None
     return service.process_question(
         payload.question,
+        connection_id=payload.connection_id,
         session_id=payload.session_id,
         row_limit_override=row_limit,
         sql_override=payload.sql_override,
@@ -32,8 +34,8 @@ def query(payload: QueryRequest) -> QueryResponse:
 
 
 @app.get("/v1/schema", response_model=SchemaResponse)
-def schema() -> SchemaResponse:
-    summary = get_schema_summary()
+def schema(connection_id: str | None = Query(default=None)) -> SchemaResponse:
+    summary = get_schema_summary(connection_id=connection_id)
     return SchemaResponse(tables=summary.get("tables", []))
 
 
@@ -53,3 +55,8 @@ def feedback(payload: FeedbackRequest) -> FeedbackResponse:
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/v1/connections", response_model=ConnectionsResponse)
+def connections() -> ConnectionsResponse:
+    return ConnectionsResponse(connections=service.get_connections())

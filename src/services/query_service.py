@@ -8,7 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from src.config.settings import get_settings
-from src.db.engine import SessionLocal
+from src.db.engine import available_connections, get_session_factory
 from src.db.schema_introspector import get_schema_summary
 from src.guardrails.rules import (
     apply_guardrails,
@@ -49,7 +49,17 @@ class QueryService:
             return session_id.strip()
         return "default"
 
-    def _run_explain(self, sql: str) -> list[str]:
+    def _normalize_connection_id(self, connection_id: str | None) -> str:
+        connections = available_connections()
+        if connection_id and connection_id in connections:
+            return connection_id
+        return "default"
+
+    def get_connections(self) -> dict[str, str]:
+        return available_connections()
+
+    def _run_explain(self, sql: str, connection_id: str) -> list[str]:
+        SessionLocal = get_session_factory(connection_id)
         with SessionLocal() as session:
             session.execute(text("SET TRANSACTION READ ONLY"))
             plan_result = session.execute(text(f"EXPLAIN {sql}"))
@@ -60,11 +70,16 @@ class QueryService:
             return plan_lines
 
     def _execute_read_only(
-        self, sql: str, max_rows: int, precomputed_explain: list[str] | None = None
+        self,
+        sql: str,
+        max_rows: int,
+        connection_id: str,
+        precomputed_explain: list[str] | None = None,
     ) -> tuple[list[dict], list[str], int]:
         start = perf_counter()
         explain_plan: list[str] = precomputed_explain or []
         rows_df = pd.DataFrame()
+        SessionLocal = get_session_factory(connection_id)
 
         try:
             with SessionLocal() as session:
@@ -89,9 +104,13 @@ class QueryService:
         return rows_df.to_dict(orient="records"), explain_plan, elapsed_ms
 
     def _schema_coverage_score(
-        self, question: str, accessed_tables: list[str], accessed_columns: list[str]
+        self,
+        question: str,
+        accessed_tables: list[str],
+        accessed_columns: list[str],
+        connection_id: str,
     ) -> float:
-        schema = get_schema_summary()
+        schema = get_schema_summary(connection_id=connection_id)
         question_tokens = {token.lower() for token in question.split() if len(token) > 2}
         expected: set[str] = set()
         for table in schema.get("tables", []):
@@ -113,6 +132,7 @@ class QueryService:
     def _build_response(
         self,
         query_id: str,
+        connection_id: str,
         session_id: str,
         question: str,
         generated: GeneratedSQL,
@@ -123,8 +143,10 @@ class QueryService:
         explain: list[str],
         elapsed_ms: int,
     ) -> QueryResponse:
-        prompt = build_prompt(question)
-        back_translated_question = self.llm.back_translate_sql(sql=guarded_sql, prompt_context=prompt)
+        prompt = build_prompt(question, connection_id=connection_id)
+        back_translated_question = self.llm.back_translate_sql(
+            sql=guarded_sql, prompt_context=prompt
+        )
         alignment = verify_sql_alignment(
             original_question=question,
             back_translated_question=back_translated_question,
@@ -133,6 +155,7 @@ class QueryService:
         log_execution_event(
             "alignment_check",
             {
+                "connection_id": connection_id,
                 "question": question,
                 "back_translated_question": back_translated_question,
                 "score": alignment.score,
@@ -156,7 +179,9 @@ class QueryService:
             )
             if alt_guardrail.allowed:
                 alt_rows, _, _ = self._execute_read_only(
-                    alt_guardrail.sql, max_rows=self.settings.max_result_rows
+                    alt_guardrail.sql,
+                    max_rows=self.settings.max_result_rows,
+                    connection_id=connection_id,
                 )
                 multi_query = evaluate_multi_query_agreement(rows, alt_rows)
                 multi_query_score = multi_query.score
@@ -171,6 +196,7 @@ class QueryService:
             question=question,
             accessed_tables=generated.accessed_tables,
             accessed_columns=generated.accessed_columns,
+            connection_id=connection_id,
         )
 
         signals = ConfidenceSignals(
@@ -194,6 +220,7 @@ class QueryService:
 
         return QueryResponse(
             query_id=query_id,
+            connection_id=connection_id,
             session_id=session_id,
             sql=guarded_sql,
             explanation=generated.explanation,
@@ -215,18 +242,20 @@ class QueryService:
     def process_question(
         self,
         question: str,
+        connection_id: str | None = None,
         session_id: str | None = None,
         row_limit_override: int | None = None,
         sql_override: str | None = None,
     ) -> QueryResponse:
         max_rows = row_limit_override or self.settings.max_result_rows
         resolved_session_id = self._normalize_session_id(session_id)
+        resolved_connection_id = self._normalize_connection_id(connection_id)
         query_id = self._new_query_id()
-        prompt = build_prompt(question)
+        prompt = build_prompt(question, connection_id=resolved_connection_id)
 
         generated = (
             GeneratedSQL(
-                sql=sql_override,
+                sql=sql_override or "",
                 explanation="User-edited SQL executed with guardrails.",
                 accessed_tables=[],
                 accessed_columns=[],
@@ -244,6 +273,7 @@ class QueryService:
             ]
             response = self._build_response(
                 query_id=query_id,
+                connection_id=resolved_connection_id,
                 session_id=resolved_session_id,
                 question=question,
                 generated=generated,
@@ -257,6 +287,7 @@ class QueryService:
             self.history.append(
                 HistoryItem(
                     query_id=response.query_id,
+                    connection_id=response.connection_id,
                     session_id=response.session_id,
                     question=question,
                     sql=response.sql,
@@ -279,6 +310,7 @@ class QueryService:
             ]
             response = self._build_response(
                 query_id=query_id,
+                connection_id=resolved_connection_id,
                 session_id=resolved_session_id,
                 question=question,
                 generated=generated,
@@ -292,6 +324,7 @@ class QueryService:
             self.history.append(
                 HistoryItem(
                     query_id=response.query_id,
+                    connection_id=response.connection_id,
                     session_id=response.session_id,
                     question=question,
                     sql=response.sql,
@@ -323,7 +356,7 @@ class QueryService:
 
         if initial_guardrail.allowed:
             try:
-                explain = self._run_explain(guarded_sql)
+                explain = self._run_explain(guarded_sql, connection_id=resolved_connection_id)
                 estimated_rows = parse_explain_total_rows(explain)
             except SQLAlchemyError as exc:
                 warnings.append(f"EXPLAIN failed: {exc}")
@@ -339,12 +372,16 @@ class QueryService:
 
             if final_guardrail.allowed:
                 rows, explain, elapsed_ms = self._execute_read_only(
-                    final_guardrail.sql, max_rows=max_rows, precomputed_explain=explain
+                    final_guardrail.sql,
+                    max_rows=max_rows,
+                    connection_id=resolved_connection_id,
+                    precomputed_explain=explain,
                 )
                 log_execution_event(
                     "query_executed",
                     {
                         "query_id": query_id,
+                        "connection_id": resolved_connection_id,
                         "session_id": resolved_session_id,
                         "question": question,
                         "sql": final_guardrail.sql,
@@ -364,6 +401,7 @@ class QueryService:
 
         response = self._build_response(
             query_id=query_id,
+            connection_id=resolved_connection_id,
             session_id=resolved_session_id,
             question=question,
             generated=generated,
@@ -378,6 +416,7 @@ class QueryService:
         self.history.append(
             HistoryItem(
                 query_id=response.query_id,
+                connection_id=response.connection_id,
                 session_id=response.session_id,
                 question=question,
                 sql=response.sql,
@@ -422,6 +461,7 @@ class QueryService:
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "query_id": target.query_id,
+            "connection_id": target.connection_id,
             "session_id": target.session_id,
             "question": target.question,
             "sql": target.sql,

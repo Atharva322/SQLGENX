@@ -19,8 +19,8 @@ def filter_relevant_schema(question: str, schema: dict, threshold: float = 0.1) 
     return {"tables": relevant_tables}
 
 
-def build_prompt(question: str) -> str:
-    schema = get_schema_summary()
+def build_prompt(question: str, connection_id: str | None = None) -> str:
+    schema = get_schema_summary(connection_id=connection_id)
     filtered = filter_relevant_schema(question, schema)
     schema_lines: list[str] = []
     for table in filtered.get("tables", []):

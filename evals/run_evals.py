@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.db.engine import SessionLocal
+from src.db.engine import get_session_factory
 from src.services.query_service import QueryService
 
 
@@ -47,6 +47,7 @@ def _normalize_rows(rows: list[dict[str, Any]]) -> list[str]:
 
 
 def _run_sql(sql: str) -> list[dict[str, Any]]:
+    SessionLocal = get_session_factory("default")
     with SessionLocal() as session:
         session.execute(text("SET TRANSACTION READ ONLY"))
         result = session.execute(text(sql))

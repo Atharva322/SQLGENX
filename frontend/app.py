@@ -14,8 +14,32 @@ if "session_id" not in st.session_state:
     st.session_state["session_id"] = f"sess_{uuid4().hex[:8]}"
 if "last_payload" not in st.session_state:
     st.session_state["last_payload"] = None
+if "connection_id" not in st.session_state:
+    st.session_state["connection_id"] = "default"
 
 st.caption(f"Session: `{st.session_state['session_id']}`")
+
+connection_map: dict[str, str] = {"default": "default"}
+try:
+    conn_resp = requests.get(f"{api_url}/v1/connections", timeout=10)
+    conn_resp.raise_for_status()
+    connection_map = conn_resp.json().get("connections", connection_map)
+except requests.RequestException:
+    pass
+
+connection_ids = list(connection_map.keys()) or ["default"]
+default_index = (
+    connection_ids.index(st.session_state["connection_id"])
+    if st.session_state["connection_id"] in connection_ids
+    else 0
+)
+selected_connection = st.selectbox(
+    "Database connection",
+    options=connection_ids,
+    index=default_index,
+    help="Choose a configured connection_id (maps to a database URL on backend).",
+)
+st.session_state["connection_id"] = selected_connection
 
 question = st.text_input(
     "Ask a natural language database question",
@@ -32,6 +56,7 @@ if run and question.strip():
                 f"{api_url}/v1/query",
                 json={
                     "question": question,
+                    "connection_id": st.session_state["connection_id"],
                     "session_id": st.session_state["session_id"],
                     "options": {"row_limit": int(limit)},
                 },
@@ -61,6 +86,7 @@ if payload:
                     f"{api_url}/v1/query",
                     json={
                         "question": question or "User edited SQL",
+                        "connection_id": st.session_state["connection_id"],
                         "session_id": st.session_state["session_id"],
                         "sql_override": edited_sql.strip(),
                         "options": {"row_limit": int(limit)},
@@ -143,6 +169,7 @@ try:
             [
                 {
                     "query_id": item.get("query_id"),
+                    "connection_id": item.get("connection_id"),
                     "question": item.get("question"),
                     "confidence": item.get("confidence"),
                     "rows": item.get("execution_meta", {}).get("rows_returned", 0),

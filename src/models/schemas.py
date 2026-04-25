@@ -9,6 +9,7 @@ class QueryOptions(BaseModel):
 
 class QueryRequest(BaseModel):
     question: str = Field(min_length=3, description="Natural language question")
+    connection_id: str | None = None
     session_id: str | None = None
     sql_override: str | None = Field(
         default=None, description="Optional user-edited SQL to execute instead of generated SQL."
@@ -37,6 +38,7 @@ class AccessedSchema(BaseModel):
 
 class QueryResponse(BaseModel):
     query_id: str
+    connection_id: str
     session_id: str
     sql: str
     explanation: str
@@ -59,6 +61,7 @@ class FeedbackPayload(BaseModel):
 
 class HistoryItem(BaseModel):
     query_id: str
+    connection_id: str
     session_id: str
     question: str
     sql: str
@@ -86,3 +89,7 @@ class FeedbackResponse(BaseModel):
     query_id: str
     stored: bool
     target_file: str
+
+
+class ConnectionsResponse(BaseModel):
+    connections: dict[str, str] = Field(default_factory=dict)

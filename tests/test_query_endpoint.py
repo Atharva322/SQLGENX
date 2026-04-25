@@ -9,6 +9,7 @@ def test_query_endpoint_returns_response_shape() -> None:
     assert response.status_code == 200
     body = response.json()
     assert 'query_id' in body
+    assert 'connection_id' in body
     assert 'session_id' in body
     assert 'sql' in body
     assert 'results' in body
