@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     max_result_rows: int = Field(default=1000, alias="MAX_RESULT_ROWS")
     max_subquery_depth: int = Field(default=3, alias="MAX_SUBQUERY_DEPTH")
     max_explain_rows: int = Field(default=1_000_000, alias="MAX_EXPLAIN_ROWS")
+    db_connect_timeout_seconds: int = Field(default=5, alias="DB_CONNECT_TIMEOUT_SECONDS")
+    db_pool_timeout_seconds: int = Field(default=10, alias="DB_POOL_TIMEOUT_SECONDS")
+    db_pool_recycle_seconds: int = Field(default=1800, alias="DB_POOL_RECYCLE_SECONDS")
     rag_enabled: bool = Field(default=True, alias="RAG_ENABLED")
     rag_embedding_model: str = Field(
         default="sentence-transformers/all-MiniLM-L6-v2", alias="RAG_EMBEDDING_MODEL"

@@ -105,3 +105,7 @@ class FeedbackResponse(BaseModel):
 
 class ConnectionsResponse(BaseModel):
     connections: dict[str, str] = Field(default_factory=dict)
+
+
+class ConnectionsHealthResponse(BaseModel):
+    connections: dict[str, dict[str, Any]] = Field(default_factory=dict)

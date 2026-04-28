@@ -1,7 +1,9 @@
 from fastapi import FastAPI, HTTPException, Query
 
+from src.db.engine import connections_health
 from src.db.schema_introspector import get_schema_summary
 from src.models.schemas import (
+    ConnectionsHealthResponse,
     ConnectionsResponse,
     FeedbackRequest,
     FeedbackResponse,
@@ -60,3 +62,8 @@ def feedback(payload: FeedbackRequest) -> FeedbackResponse:
 @app.get("/v1/connections", response_model=ConnectionsResponse)
 def connections() -> ConnectionsResponse:
     return ConnectionsResponse(connections=service.get_connections())
+
+
+@app.get("/v1/connections/health", response_model=ConnectionsHealthResponse)
+def connections_healthcheck() -> ConnectionsHealthResponse:
+    return ConnectionsHealthResponse(connections=connections_health())
