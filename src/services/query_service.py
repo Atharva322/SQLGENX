@@ -249,7 +249,11 @@ class QueryService:
         warnings.extend(sanity.warnings)
 
         multi_query_score = 0.5
-        if should_run_multi_query_validation(question=question, sql=guarded_sql):
+        if self.settings.enable_multi_query_validation and should_run_multi_query_validation(
+            question=question,
+            sql=guarded_sql,
+            threshold=self.settings.multi_query_complexity_threshold,
+        ):
             alt_generated = self.llm.generate_alternative_sql(
                 question=question, prompt_context=prompt, primary_sql=guarded_sql
             )

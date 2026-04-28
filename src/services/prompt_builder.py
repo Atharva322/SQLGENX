@@ -8,6 +8,7 @@ from src.services.rag_retriever import retrieve_context
 
 
 FEEDBACK_FEWSHOTS_PATH = Path("data") / "feedback_fewshots.jsonl"
+PROMPT_ASSETS_PATH = Path("data") / "prompt_assets.json"
 STOPWORDS = {
     "the",
     "a",
@@ -68,6 +69,32 @@ def _load_feedback_examples() -> list[dict]:
     return examples
 
 
+def _load_prompt_assets_examples() -> list[dict]:
+    if not PROMPT_ASSETS_PATH.exists():
+        return []
+    try:
+        payload = json.loads(PROMPT_ASSETS_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    examples = payload.get("few_shot_examples", [])
+    normalized: list[dict] = []
+    for example in examples:
+        question = str(example.get("question", "")).strip()
+        sql = str(example.get("sql", "")).strip()
+        if question and sql:
+            normalized.append(
+                {
+                    "question": question,
+                    "sql": sql,
+                    "confidence": 0.95,
+                    "connection_id": "default",
+                    "schema_fingerprint": None,
+                    "source": "prompt_assets",
+                }
+            )
+    return normalized
+
+
 def select_relevant_feedback_examples(
     question: str,
     connection_id: str | None = None,
@@ -79,7 +106,8 @@ def select_relevant_feedback_examples(
     candidates: list[tuple[int, float, float, dict]] = []
     resolved_connection_id = connection_id or "default"
 
-    for example in _load_feedback_examples():
+    all_examples = _load_prompt_assets_examples() + _load_feedback_examples()
+    for example in all_examples:
         conf = float(example.get("confidence", 0.0))
         if conf < min_confidence:
             continue

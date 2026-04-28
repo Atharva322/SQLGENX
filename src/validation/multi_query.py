@@ -10,23 +10,47 @@ class MultiQueryResult:
     comparison_summary: str = ""
 
 
-def should_run_multi_query_validation(question: str, sql: str) -> bool:
-    text = f"{question} {sql}".lower()
-    complexity_markers = [
-        "join",
-        "group by",
-        "having",
-        "distinct",
-        "trend",
+def should_run_multi_query_validation(question: str, sql: str, threshold: int = 2) -> bool:
+    normalized_sql = sql.strip().lower()
+    if normalized_sql == "unanswerable":
+        return False
+
+    question_text = question.lower()
+    sql_text = sql.lower()
+    text = f"{question_text} {sql_text}"
+
+    question_markers = [
         "compare",
+        "vs",
+        "versus",
+        "trend",
         "breakdown",
         "over time",
-        "top",
         "rank",
+        "top",
+        "share",
+        "contribution",
+        "percent",
+        "percentage",
     ]
-    marker_hits = sum(1 for marker in complexity_markers if marker in text)
+    sql_markers = [
+        " join ",
+        " group by ",
+        " having ",
+        " distinct ",
+        " over (",
+        " union ",
+        " intersect ",
+        " except ",
+    ]
+
+    question_hits = sum(1 for marker in question_markers if marker in question_text)
+    sql_hits = sum(1 for marker in sql_markers if marker in f" {sql_text} ")
     nested_select = len(re.findall(r"\(\s*select\b", text, flags=re.IGNORECASE))
-    return marker_hits >= 1 or nested_select > 0
+    complexity_score = question_hits + sql_hits + (2 if nested_select > 0 else 0)
+
+    # Run only for clearly complex questions to reduce latency on simple cases.
+    return complexity_score >= max(1, threshold)
 
 
 def _normalize_rows(rows: list[dict]) -> list[str]:

@@ -12,6 +12,50 @@
     {
       "question": "How many employees are in each department?",
       "sql": "SELECT d.name, COUNT(*) AS employee_count FROM employees e JOIN departments d ON d.id = e.department_id GROUP BY d.name ORDER BY employee_count DESC;"
+    },
+    {
+      "question": "Average salary by department",
+      "sql": "SELECT d.name, AVG(e.salary) AS avg_salary FROM employees e JOIN departments d ON d.id = e.department_id GROUP BY d.name;"
+    },
+    {
+      "question": "Total sales by department",
+      "sql": "SELECT d.name, SUM(s.amount) AS total_sales FROM sales s JOIN employees e ON e.id = s.employee_id JOIN departments d ON d.id = e.department_id GROUP BY d.name;"
+    },
+    {
+      "question": "Employee count by department",
+      "sql": "SELECT d.name, COUNT(*) AS employee_count FROM employees e JOIN departments d ON d.id = e.department_id GROUP BY d.name;"
+    },
+    {
+      "question": "Total sales by channel",
+      "sql": "SELECT channel, SUM(amount) AS total_sales FROM sales GROUP BY channel;"
+    },
+    {
+      "question": "Average sale amount by channel",
+      "sql": "SELECT channel, AVG(amount) AS avg_sale FROM sales GROUP BY channel;"
+    },
+    {
+      "question": "List sales in EMEA",
+      "sql": "SELECT id, amount, sale_date FROM sales WHERE region = 'EMEA';"
+    },
+    {
+      "question": "Show sales through direct channel",
+      "sql": "SELECT id, amount, sale_date FROM sales WHERE channel = 'Direct';"
+    },
+    {
+      "question": "Employees hired in 2022",
+      "sql": "SELECT id, first_name, last_name FROM employees WHERE hired_at >= '2022-01-01' AND hired_at < '2023-01-01';"
+    },
+    {
+      "question": "Top region by total sales",
+      "sql": "SELECT region, SUM(amount) AS total_sales FROM sales GROUP BY region ORDER BY total_sales DESC LIMIT 1;"
+    },
+    {
+      "question": "Department with highest total sales",
+      "sql": "SELECT d.name, SUM(s.amount) AS total_sales FROM sales s JOIN employees e ON e.id = s.employee_id JOIN departments d ON d.id = e.department_id GROUP BY d.name ORDER BY total_sales DESC LIMIT 1;"
+    },
+    {
+      "question": "Latest sale date",
+      "sql": "SELECT MAX(sale_date) AS latest_sale_date FROM sales;"
     }
   ]
 }

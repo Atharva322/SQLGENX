@@ -2,6 +2,7 @@ import os
 import json
 from uuid import uuid4
 from pathlib import Path
+import sys
 
 import pandas as pd
 import requests
@@ -11,7 +12,8 @@ st.set_page_config(page_title="Text-to-SQL Interface", layout="wide")
 st.title("Text-to-SQL Interface with Guardrails and Hallucination Detection")
 
 api_url = os.getenv("API_URL", "http://localhost:8000")
-eval_snapshot_path = Path("evals") / "latest_eval_snapshot.json"
+project_root = Path(__file__).resolve().parents[1]
+eval_snapshot_path = project_root / "evals" / "latest_eval_snapshot.json"
 
 if "session_id" not in st.session_state:
     st.session_state["session_id"] = f"sess_{uuid4().hex[:8]}"
@@ -253,11 +255,13 @@ with eval_col2:
 
 if run_eval:
     try:
+        if str(project_root) not in sys.path:
+            sys.path.insert(0, str(project_root))
         from evals.run_evals import run_eval_suite
 
         with st.spinner("Running retrieval-focused evaluation..."):
             output = run_eval_suite(
-                dataset_path=Path("evals") / "golden_queries.jsonl",
+                dataset_path=project_root / "evals" / "golden_queries.jsonl",
                 limit=20,
                 retrieval_only=True,
             )
