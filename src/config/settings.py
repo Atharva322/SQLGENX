@@ -23,6 +23,14 @@ class Settings(BaseSettings):
     max_result_rows: int = Field(default=1000, alias="MAX_RESULT_ROWS")
     max_subquery_depth: int = Field(default=3, alias="MAX_SUBQUERY_DEPTH")
     max_explain_rows: int = Field(default=1_000_000, alias="MAX_EXPLAIN_ROWS")
+    rag_enabled: bool = Field(default=True, alias="RAG_ENABLED")
+    rag_embedding_model: str = Field(
+        default="sentence-transformers/all-MiniLM-L6-v2", alias="RAG_EMBEDDING_MODEL"
+    )
+    rag_embedding_local_only: bool = Field(default=True, alias="RAG_EMBEDDING_LOCAL_ONLY")
+    rag_top_k_schema: int = Field(default=5, alias="RAG_TOP_K_SCHEMA")
+    rag_top_k_examples: int = Field(default=3, alias="RAG_TOP_K_EXAMPLES")
+    rag_min_feedback_confidence: float = Field(default=0.65, alias="RAG_MIN_FEEDBACK_CONFIDENCE")
 
     api_host: str = Field(default="0.0.0.0", alias="API_HOST")
     api_port: int = Field(default=8000, alias="API_PORT")

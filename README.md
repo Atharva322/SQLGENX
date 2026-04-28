@@ -77,6 +77,26 @@ CONNECTION_URLS_JSON={"default":"postgresql://text2sql_user:text2sql_pass@localh
 
 The UI reads `/v1/connections` and lets you switch by `connection_id` without editing env per query.
 
+## RAG Retrieval for SQL Generation
+
+The prompt engine now supports retrieval-augmented generation:
+- embeds/retrieves relevant schema chunks (tables + columns)
+- embeds/retrieves relevant successful past queries from feedback few-shots
+- injects top-k retrieved schema + examples into the SQL-generation prompt
+
+Config via env:
+
+```env
+RAG_ENABLED=true
+RAG_EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+RAG_EMBEDDING_LOCAL_ONLY=true
+RAG_TOP_K_SCHEMA=5
+RAG_TOP_K_EXAMPLES=3
+RAG_MIN_FEEDBACK_CONFIDENCE=0.65
+```
+
+Set `RAG_EMBEDDING_LOCAL_ONLY=false` only when you want automatic model downloads.
+
 ## Evaluation Suite
 
 - Golden dataset: `evals/golden_queries.jsonl` (55 cases)
@@ -88,11 +108,19 @@ Run:
 python evals/run_evals.py
 ```
 
+Fast retrieval-metric only run:
+
+```bash
+python evals/run_evals.py --retrieval-only --limit 20
+```
+
 Metrics reported:
 - SQL exact match
 - execution result match
 - hallucination detection rate
 - guardrail effectiveness
+- schema Recall@K
+- schema nDCG@K
 
 ## Feedback Flywheel Files
 

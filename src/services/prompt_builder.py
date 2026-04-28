@@ -2,7 +2,9 @@ from pathlib import Path
 import json
 import re
 
+from src.config.settings import get_settings
 from src.db.schema_introspector import compute_schema_fingerprint, get_schema_summary
+from src.services.rag_retriever import retrieve_context
 
 
 FEEDBACK_FEWSHOTS_PATH = Path("data") / "feedback_fewshots.jsonl"
@@ -24,24 +26,6 @@ STOPWORDS = {
     "in",
     "on",
 }
-
-
-def filter_relevant_schema(question: str, schema: dict, threshold: float = 0.1) -> dict:
-    """Simple lexical relevance filter stub for schema narrowing."""
-    q_terms = {t.lower() for t in question.split()}
-    relevant_tables = []
-    for table in schema.get("tables", []):
-        table_terms = {table.get("table", "").lower()}
-        table_terms.update(col.get("name", "").lower() for col in table.get("columns", []))
-        overlap = len(q_terms.intersection(table_terms))
-        score = overlap / max(1, len(q_terms))
-        if score >= threshold:
-            relevant_tables.append(table)
-
-    if not relevant_tables:
-        relevant_tables = schema.get("tables", [])[:5]
-
-    return {"tables": relevant_tables}
 
 
 def _tokenize(text: str) -> set[str]:
@@ -133,10 +117,42 @@ def select_relevant_feedback_examples(
 
 
 def build_prompt(question: str, connection_id: str | None = None) -> str:
+    settings = get_settings()
     schema = get_schema_summary(connection_id=connection_id)
-    filtered = filter_relevant_schema(question, schema)
+    all_tables = schema.get("tables", [])
     schema_lines: list[str] = []
-    for table in filtered.get("tables", []):
+    schema_fingerprint = schema.get("schema_fingerprint")
+    if not schema_fingerprint:
+        schema_fingerprint = compute_schema_fingerprint(schema)
+
+    scoped_feedback = select_relevant_feedback_examples(
+        question,
+        connection_id=connection_id,
+        schema_fingerprint=schema_fingerprint,
+        max_examples=max(5, settings.rag_top_k_examples),
+        min_confidence=settings.rag_min_feedback_confidence,
+    )
+
+    retrieval_meta: dict[str, str | int | float] = {
+        "mode": "disabled",
+        "schema_method": "none",
+        "example_method": "none",
+    }
+    selected_tables = all_tables[: settings.rag_top_k_schema]
+    selected_examples = scoped_feedback[: settings.rag_top_k_examples]
+    if settings.rag_enabled:
+        rag = retrieve_context(
+            question=question,
+            schema=schema,
+            feedback_examples=scoped_feedback,
+            top_k_schema=settings.rag_top_k_schema,
+            top_k_examples=settings.rag_top_k_examples,
+        )
+        selected_tables = rag.selected_schema_tables
+        selected_examples = rag.selected_examples
+        retrieval_meta = rag.retrieval_meta
+
+    for table in selected_tables:
         table_name = table.get("table", "")
         columns = table.get("columns", [])
         col_blob = ", ".join(
@@ -145,15 +161,7 @@ def build_prompt(question: str, connection_id: str | None = None) -> str:
         schema_lines.append(f"- {table_name}: {col_blob}")
 
     schema_text = "\n".join(schema_lines) if schema_lines else "- no schema available"
-    schema_fingerprint = schema.get("schema_fingerprint")
-    if not schema_fingerprint:
-        schema_fingerprint = compute_schema_fingerprint(schema)
-
-    fewshots = select_relevant_feedback_examples(
-        question,
-        connection_id=connection_id,
-        schema_fingerprint=schema_fingerprint,
-    )
+    fewshots = selected_examples
     fewshot_text = ""
     if fewshots:
         fewshot_lines = []
@@ -176,6 +184,10 @@ def build_prompt(question: str, connection_id: str | None = None) -> str:
         "5) Exception to rule 3: if a requested grouping label is unavailable but an unambiguous surrogate"
         " key exists (such as *_id), group by that key instead of returning UNANSWERABLE.\n"
         "6) Only output SELECT/WITH SQL when answerable.\n\n"
+        "RAG retrieval metadata:\n"
+        f"- mode: {retrieval_meta.get('mode', 'none')}\n"
+        f"- schema retrieval: {retrieval_meta.get('schema_method', 'none')}\n"
+        f"- example retrieval: {retrieval_meta.get('example_method', 'none')}\n\n"
         f"Question: {question}\n\n"
         "Relevant schema:\n"
         f"{schema_text}\n"

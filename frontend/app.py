@@ -1,5 +1,7 @@
 import os
+import json
 from uuid import uuid4
+from pathlib import Path
 
 import pandas as pd
 import requests
@@ -9,6 +11,7 @@ st.set_page_config(page_title="Text-to-SQL Interface", layout="wide")
 st.title("Text-to-SQL Interface with Guardrails and Hallucination Detection")
 
 api_url = os.getenv("API_URL", "http://localhost:8000")
+eval_snapshot_path = Path("evals") / "latest_eval_snapshot.json"
 
 if "session_id" not in st.session_state:
     st.session_state["session_id"] = f"sess_{uuid4().hex[:8]}"
@@ -16,6 +19,8 @@ if "last_payload" not in st.session_state:
     st.session_state["last_payload"] = None
 if "connection_id" not in st.session_state:
     st.session_state["connection_id"] = "default"
+if "eval_snapshot" not in st.session_state:
+    st.session_state["eval_snapshot"] = None
 
 st.caption(f"Session: `{st.session_state['session_id']}`")
 
@@ -238,3 +243,73 @@ try:
         st.caption("No history yet for this session.")
 except requests.RequestException:
     st.caption("History unavailable while API is offline.")
+
+st.subheader("Evaluation Snapshot")
+eval_col1, eval_col2 = st.columns(2)
+with eval_col1:
+    run_eval = st.button("Run Quick Eval")
+with eval_col2:
+    load_eval = st.button("Load Last Snapshot")
+
+if run_eval:
+    try:
+        from evals.run_evals import run_eval_suite
+
+        with st.spinner("Running retrieval-focused evaluation..."):
+            output = run_eval_suite(
+                dataset_path=Path("evals") / "golden_queries.jsonl",
+                limit=20,
+                retrieval_only=True,
+            )
+        st.session_state["eval_snapshot"] = output
+        eval_snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        eval_snapshot_path.write_text(json.dumps(output, indent=2), encoding="utf-8")
+        st.success("Evaluation snapshot updated.")
+    except Exception as exc:
+        st.error(f"Eval run unavailable in this environment: {exc}")
+
+if load_eval:
+    try:
+        if eval_snapshot_path.exists():
+            st.session_state["eval_snapshot"] = json.loads(
+                eval_snapshot_path.read_text(encoding="utf-8")
+            )
+            st.success("Loaded latest eval snapshot.")
+        else:
+            st.warning("No saved eval snapshot found yet.")
+    except Exception as exc:
+        st.error(f"Failed to load eval snapshot: {exc}")
+
+eval_snapshot = st.session_state.get("eval_snapshot")
+if eval_snapshot:
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("SQL Exact Match", f"{float(eval_snapshot.get('sql_exact_match', 0.0)):.3f}")
+    m2.metric("Execution Match", f"{float(eval_snapshot.get('execution_match', 0.0)):.3f}")
+    m3.metric(
+        "Hallucination Detection",
+        f"{float(eval_snapshot.get('hallucination_detection_rate', 0.0)):.3f}",
+    )
+    m4.metric(
+        "Guardrail Effectiveness",
+        f"{float(eval_snapshot.get('guardrail_effectiveness', 0.0)):.3f}",
+    )
+
+    retrieval_label = next(
+        (key for key in eval_snapshot.keys() if key.startswith("schema_recall_at_")),
+        "schema_recall_at_k",
+    )
+    ndcg_label = next(
+        (key for key in eval_snapshot.keys() if key.startswith("schema_ndcg_at_")),
+        "schema_ndcg_at_k",
+    )
+
+    r1, r2, r3 = st.columns(3)
+    r1.metric("Schema Recall@K", f"{float(eval_snapshot.get(retrieval_label, 0.0)):.3f}")
+    r2.metric("Schema nDCG@K", f"{float(eval_snapshot.get(ndcg_label, 0.0)):.3f}")
+    r3.metric("Retrieval Cases", int(eval_snapshot.get("retrieval_eval_cases", 0)))
+
+    st.caption(
+        f"Retrieval context available: {bool(eval_snapshot.get('retrieval_context_available', False))} | "
+        f"Mode: {'retrieval-only' if bool(eval_snapshot.get('retrieval_only_mode', False)) else 'full'} | "
+        f"Cases: {int(eval_snapshot.get('limited_cases', eval_snapshot.get('total_cases', 0)))}"
+    )
