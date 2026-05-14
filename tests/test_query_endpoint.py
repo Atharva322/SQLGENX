@@ -21,6 +21,8 @@ def test_query_endpoint_returns_response_shape() -> None:
     assert 'warnings' in body
     assert 'accessed' in body
     assert 'execution_meta' in body
+    assert 'linking_meta' in body
+    assert 'constraint_meta' in body
 
 
 def test_query_endpoint_blocks_malicious_prompt_intent() -> None:

@@ -7,6 +7,7 @@ from openai import OpenAI
 from pydantic import BaseModel, Field, ValidationError
 
 from src.config.settings import get_settings
+from src.models.schemas import QueryPlanDraft
 
 
 @dataclass
@@ -19,12 +20,31 @@ class GeneratedSQL:
     token_usage: dict[str, int | str]
 
 
+@dataclass
+class GeneratedQueryPlan:
+    plan: QueryPlanDraft
+    confidence: float
+    token_usage: dict[str, int | str]
+
+
 class StructuredSQLResponse(BaseModel):
     sql: str = Field(min_length=1)
     explanation: str = Field(min_length=1)
     confidence: float = Field(ge=0.0, le=1.0)
     tables_accessed: list[str] = Field(default_factory=list)
     columns_accessed: list[str] = Field(default_factory=list)
+
+
+class StructuredQueryPlanResponse(BaseModel):
+    intent: str = Field(default="select")
+    target_tables: list[str] = Field(default_factory=list)
+    target_columns: list[str] = Field(default_factory=list)
+    grouping: list[str] = Field(default_factory=list)
+    aggregations: list[str] = Field(default_factory=list)
+    filters: list[str] = Field(default_factory=list)
+    join_path: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
 
 
 class LLMClient:
@@ -47,6 +67,17 @@ class LLMClient:
             "If the question is ambiguous, set sql to UNANSWERABLE and explain ambiguity.\n"
             "Return valid JSON with keys: "
             "sql, explanation, confidence, tables_accessed, columns_accessed."
+        )
+
+    def _plan_prompt(self, question: str, prompt_context: str) -> str:
+        return (
+            f"Question: {question}\n\n"
+            f"{prompt_context}\n\n"
+            "Create a grounded query plan before SQL generation.\n"
+            "Use only schema-linked tables/columns. Never invent metrics or join paths.\n"
+            "If the question is not answerable, leave target_tables/target_columns empty and explain in notes.\n"
+            "Return valid JSON with keys: intent, target_tables, target_columns, grouping, aggregations, "
+            "filters, join_path, notes, confidence."
         )
 
     def _json_chat_openai(self, system: str, user: str) -> dict:
@@ -170,6 +201,44 @@ class LLMClient:
             accessed_tables=response.tables_accessed,
             accessed_columns=response.columns_accessed,
             model_confidence=response.confidence,
+            token_usage=meta,
+        )
+
+    def generate_query_plan(self, question: str, prompt_context: str) -> GeneratedQueryPlan:
+        response: StructuredQueryPlanResponse
+        meta: dict[str, int | str] = {
+            "provider": self._provider() or "none",
+            "model": self.settings.llm_model or "",
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
+        try:
+            if self._is_openai_enabled():
+                parsed = self._json_chat_openai(self._system_prompt(), self._plan_prompt(question, prompt_context))
+                meta = parsed.pop("_meta", meta)
+                response = StructuredQueryPlanResponse.model_validate(parsed)
+            elif self._is_anthropic_enabled():
+                parsed = self._json_chat_anthropic(self._system_prompt(), self._plan_prompt(question, prompt_context))
+                meta = parsed.pop("_meta", meta)
+                response = StructuredQueryPlanResponse.model_validate(parsed)
+            else:
+                response = StructuredQueryPlanResponse()
+        except (ValidationError, json.JSONDecodeError, Exception):
+            response = StructuredQueryPlanResponse()
+
+        return GeneratedQueryPlan(
+            plan=QueryPlanDraft(
+                intent=response.intent,
+                target_tables=response.target_tables,
+                target_columns=response.target_columns,
+                grouping=response.grouping,
+                aggregations=response.aggregations,
+                filters=response.filters,
+                join_path=response.join_path,
+                notes=response.notes,
+            ),
+            confidence=response.confidence,
             token_usage=meta,
         )
 

@@ -39,6 +39,57 @@ class ReasoningMeta(BaseModel):
     selected_candidate: str = "primary"
     candidate_scores: list[dict[str, Any]] = Field(default_factory=list)
     validator_notes: list[str] = Field(default_factory=list)
+    query_plan: dict[str, Any] = Field(default_factory=dict)
+
+
+class SchemaCandidate(BaseModel):
+    identifier: str
+    kind: Literal["table", "column"]
+    canonical_table: str | None = None
+    canonical_column: str | None = None
+    score: float = 0.0
+    evidence: list[str] = Field(default_factory=list)
+    matched_synonyms: list[str] = Field(default_factory=list)
+
+
+class ResolvedIdentifierSet(BaseModel):
+    tables: list[str] = Field(default_factory=list)
+    columns: list[str] = Field(default_factory=list)
+    join_hints: list[str] = Field(default_factory=list)
+
+
+class LinkingContext(BaseModel):
+    normalized_question: str
+    schema_fingerprint: str
+    candidates: list[SchemaCandidate] = Field(default_factory=list)
+    resolved: ResolvedIdentifierSet = Field(default_factory=ResolvedIdentifierSet)
+    ambiguous: bool = False
+    ambiguity_reasons: list[str] = Field(default_factory=list)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    synonym_hits: list[str] = Field(default_factory=list)
+    unresolved_identifiers: list[str] = Field(default_factory=list)
+    resolution_status: str = "resolved"
+    join_grounding_status: str = "unknown"
+    retrieval_meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class QueryPlanDraft(BaseModel):
+    intent: str = "select"
+    target_tables: list[str] = Field(default_factory=list)
+    target_columns: list[str] = Field(default_factory=list)
+    grouping: list[str] = Field(default_factory=list)
+    aggregations: list[str] = Field(default_factory=list)
+    filters: list[str] = Field(default_factory=list)
+    join_path: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class ConstraintValidationResult(BaseModel):
+    passed: bool = True
+    blocked_identifiers: list[str] = Field(default_factory=list)
+    reasons: list[str] = Field(default_factory=list)
+    violation_type: str | None = None
+    enforced_policy: str | None = None
 
 
 class AccessedSchema(BaseModel):
@@ -59,6 +110,8 @@ class QueryResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     execution_meta: ExecutionMeta
     reasoning: ReasoningMeta = Field(default_factory=ReasoningMeta)
+    linking_meta: LinkingContext | None = None
+    constraint_meta: ConstraintValidationResult | None = None
 
 
 class SchemaResponse(BaseModel):
@@ -83,6 +136,8 @@ class HistoryItem(BaseModel):
     results: list[dict[str, Any]] = Field(default_factory=list)
     execution_meta: ExecutionMeta
     reasoning: ReasoningMeta = Field(default_factory=ReasoningMeta)
+    linking_meta: LinkingContext | None = None
+    constraint_meta: ConstraintValidationResult | None = None
     feedback: FeedbackPayload | None = None
 
 

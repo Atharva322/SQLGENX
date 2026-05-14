@@ -40,6 +40,34 @@ class Settings(BaseSettings):
     rag_top_k_schema: int = Field(default=5, alias="RAG_TOP_K_SCHEMA")
     rag_top_k_examples: int = Field(default=3, alias="RAG_TOP_K_EXAMPLES")
     rag_min_feedback_confidence: float = Field(default=0.65, alias="RAG_MIN_FEEDBACK_CONFIDENCE")
+    schema_linking_enabled: bool = Field(default=True, alias="SCHEMA_LINKING_ENABLED")
+    schema_synonym_source: str = Field(default="", alias="SCHEMA_SYNONYM_SOURCE")
+    schema_link_top_k: int = Field(default=8, alias="SCHEMA_LINK_TOP_K")
+    constrained_sql_enabled: bool = Field(default=True, alias="CONSTRAINED_SQL_ENABLED")
+    constrained_sql_strict_identifiers: bool = Field(
+        default=True, alias="CONSTRAINED_SQL_STRICT_IDENTIFIERS"
+    )
+    identifier_resolution_fail_fast_enabled: bool = Field(
+        default=True, alias="IDENTIFIER_RESOLUTION_FAIL_FAST_ENABLED"
+    )
+    fail_fast_min_link_confidence: float = Field(
+        default=0.25, alias="FAIL_FAST_MIN_LINK_CONFIDENCE"
+    )
+    fail_fast_max_unresolved: int = Field(default=6, alias="FAIL_FAST_MAX_UNRESOLVED")
+    fail_fast_require_low_confidence: bool = Field(
+        default=True, alias="FAIL_FAST_REQUIRE_LOW_CONFIDENCE"
+    )
+    join_grounding_strict_enabled: bool = Field(default=True, alias="JOIN_GROUNDING_STRICT_ENABLED")
+    alternative_sql_adaptive_enabled: bool = Field(
+        default=True, alias="ALTERNATIVE_SQL_ADAPTIVE_ENABLED"
+    )
+    alternative_sql_complexity_threshold: int = Field(
+        default=2, alias="ALTERNATIVE_SQL_COMPLEXITY_THRESHOLD"
+    )
+    multi_query_easy_skip_enabled: bool = Field(default=True, alias="MULTI_QUERY_EASY_SKIP_ENABLED")
+    intermediate_trace_logging_enabled: bool = Field(
+        default=True, alias="INTERMEDIATE_TRACE_LOGGING_ENABLED"
+    )
 
     api_host: str = Field(default="0.0.0.0", alias="API_HOST")
     api_port: int = Field(default=8000, alias="API_PORT")

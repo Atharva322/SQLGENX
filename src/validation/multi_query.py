@@ -44,13 +44,45 @@ def should_run_multi_query_validation(question: str, sql: str, threshold: int = 
         " except ",
     ]
 
-    question_hits = sum(1 for marker in question_markers if marker in question_text)
-    sql_hits = sum(1 for marker in sql_markers if marker in f" {sql_text} ")
-    nested_select = len(re.findall(r"\(\s*select\b", text, flags=re.IGNORECASE))
-    complexity_score = question_hits + sql_hits + (2 if nested_select > 0 else 0)
+    complexity_score = compute_complexity_score(question_text, sql_text)
 
     # Run only for clearly complex questions to reduce latency on simple cases.
     return complexity_score >= max(1, threshold)
+
+
+def compute_complexity_score(question: str, sql: str) -> int:
+    question_text = question.lower()
+    sql_text = sql.lower()
+    text = f"{question_text} {sql_text}"
+
+    question_markers = [
+        "compare",
+        "vs",
+        "versus",
+        "trend",
+        "breakdown",
+        "over time",
+        "rank",
+        "top",
+        "share",
+        "contribution",
+        "percent",
+        "percentage",
+    ]
+    sql_markers = [
+        " join ",
+        " group by ",
+        " having ",
+        " distinct ",
+        " over (",
+        " union ",
+        " intersect ",
+        " except ",
+    ]
+    question_hits = sum(1 for marker in question_markers if marker in question_text)
+    sql_hits = sum(1 for marker in sql_markers if marker in f" {sql_text} ")
+    nested_select = len(re.findall(r"\(\s*select\b", text, flags=re.IGNORECASE))
+    return question_hits + sql_hits + (2 if nested_select > 0 else 0)
 
 
 def _normalize_rows(rows: list[dict]) -> list[str]:

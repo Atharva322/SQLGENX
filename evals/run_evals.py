@@ -191,6 +191,11 @@ def run_eval_suite(
     retrieval_eval_cases = 0
     schema_recall_sum = 0.0
     schema_ndcg_sum = 0.0
+    linking_eval_cases = 0
+    linking_precision_sum = 0.0
+    linking_recall_sum = 0.0
+    ambiguity_eval_cases = 0
+    ambiguity_hits = 0
     scored_accuracy_cases = 0
     success_cases = 0
     latency_sum_ms = 0
@@ -202,6 +207,11 @@ def run_eval_suite(
     false_block_cases = 0
     hallucination_false_positive = 0
     hallucination_false_negative = 0
+    severe_fail_fast_cases = 0
+    alt_skipped_easy_cases = 0
+    multi_query_skipped_easy_cases = 0
+    join_grounding_violation_cases = 0
+    post_generation_constraint_unanswerable_cases = 0
     output_buckets = {
         "answered": 0,
         "unanswerable": 0,
@@ -242,7 +252,20 @@ def run_eval_suite(
         )
         response = response_model.model_dump()
         generated_sql = response["sql"]
+        linking_meta = response.get("linking_meta") or {}
         warnings = " ".join(response.get("warnings", [])).lower()
+        constraint_meta = response.get("constraint_meta") or {}
+        reasoning = response.get("reasoning", {}) or {}
+        if "severe fail-fast unanswerable" in warnings:
+            severe_fail_fast_cases += 1
+        if str(reasoning.get("strategy", "")) == "primary_only_easy_path":
+            alt_skipped_easy_cases += 1
+        if "multi-query skipped for easy" in warnings:
+            multi_query_skipped_easy_cases += 1
+        if str(constraint_meta.get("violation_type", "")) == "join_not_grounded":
+            join_grounding_violation_cases += 1
+        if "converted to unanswerable due to unresolved-link violation" in warnings:
+            post_generation_constraint_unanswerable_cases += 1
         blocked = (
             "blocked" in warnings
             or "malicious" in warnings
@@ -266,6 +289,16 @@ def run_eval_suite(
             output_buckets["answered"] += 1
 
         if expected_sql and expected_sql not in {"UNANSWERABLE", "BLOCKED"}:
+            expected_tables = _extract_tables_from_sql(expected_sql)
+            if expected_tables and linking_meta:
+                linking_eval_cases += 1
+                resolved_tables = {
+                    str(t).lower()
+                    for t in (linking_meta.get("resolved", {}) or {}).get("tables", [])
+                }
+                hits = len(expected_tables.intersection(resolved_tables))
+                linking_precision_sum += hits / max(1, len(resolved_tables))
+                linking_recall_sum += hits / max(1, len(expected_tables))
             scored_accuracy_cases += 1
             if _normalize_sql(generated_sql) == _normalize_sql(expected_sql):
                 exact_match_hits += 1
@@ -313,6 +346,11 @@ def run_eval_suite(
             safe_eval_cases += 1
             if blocked:
                 false_block_cases += 1
+        if case.get("expect_ambiguous_linking") is not None:
+            ambiguity_eval_cases += 1
+            expected_ambiguous = bool(case.get("expect_ambiguous_linking"))
+            if bool(linking_meta.get("ambiguous")) == expected_ambiguous:
+                ambiguity_hits += 1
 
     if retrieval_only:
         exact_match = 0.0
@@ -344,6 +382,13 @@ def run_eval_suite(
         accuracy_pct = round((execution_match_hits / max(1, scored_accuracy_cases)) * 100, 2)
     schema_recall_at_k = round(schema_recall_sum / max(1, retrieval_eval_cases), 3)
     schema_ndcg_at_k = round(schema_ndcg_sum / max(1, retrieval_eval_cases), 3)
+    schema_link_precision = round(linking_precision_sum / max(1, linking_eval_cases), 3)
+    schema_link_recall = round(linking_recall_sum / max(1, linking_eval_cases), 3)
+    ambiguity_accuracy = round(ambiguity_hits / max(1, ambiguity_eval_cases), 3)
+    answerable_unanswerable_rate = round(
+        output_buckets["unanswerable"] / max(1, scored_accuracy_cases),
+        3,
+    )
 
     return {
         "total_cases": total,
@@ -365,7 +410,17 @@ def run_eval_suite(
         "guardrail_eval_cases": guardrail_eval_cases,
         f"schema_recall_at_{rag_k}": schema_recall_at_k,
         f"schema_ndcg_at_{rag_k}": schema_ndcg_at_k,
+        "schema_link_precision": schema_link_precision,
+        "schema_link_recall": schema_link_recall,
+        "ambiguity_accuracy": ambiguity_accuracy,
+        "ambiguity_eval_cases": ambiguity_eval_cases,
         "retrieval_eval_cases": retrieval_eval_cases,
+        "severe_fail_fast_cases": severe_fail_fast_cases,
+        "alt_skipped_easy_cases": alt_skipped_easy_cases,
+        "multi_query_skipped_easy_cases": multi_query_skipped_easy_cases,
+        "join_grounding_violation_cases": join_grounding_violation_cases,
+        "post_generation_constraint_unanswerable_cases": post_generation_constraint_unanswerable_cases,
+        "answerable_unanswerable_rate": answerable_unanswerable_rate,
         "output_buckets": output_buckets,
         "retrieval_context_available": retrieval_context_available,
         "retrieval_only_mode": retrieval_only,

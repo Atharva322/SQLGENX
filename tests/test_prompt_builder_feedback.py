@@ -174,3 +174,53 @@ def test_prompt_includes_rag_metadata_when_enabled(monkeypatch) -> None:
     assert "- mode: embedding" in prompt
     assert "- schema retrieval: embedding" in prompt
     assert "- example retrieval: embedding" in prompt
+
+
+def test_prompt_includes_query_plan_draft(monkeypatch) -> None:
+    monkeypatch.setattr(
+        prompt_builder,
+        "get_settings",
+        lambda: SimpleNamespace(
+            rag_enabled=False,
+            rag_top_k_schema=2,
+            rag_top_k_examples=1,
+            rag_min_feedback_confidence=0.65,
+        ),
+    )
+    monkeypatch.setattr(
+        prompt_builder,
+        "get_schema_summary",
+        lambda connection_id=None: {
+            "tables": [
+                {"table": "sales", "columns": [{"name": "amount", "type": "NUMERIC"}, {"name": "region", "type": "TEXT"}]}
+            ],
+            "schema_fingerprint": "fp_default",
+        },
+    )
+    prompt = prompt_builder.build_prompt(
+        "Show total sales by region",
+        linking_context=SimpleNamespace(
+            normalized_question="show total sales by region",
+            confidence=0.8,
+            ambiguous=False,
+            ambiguity_reasons=[],
+            resolved=SimpleNamespace(
+                tables=["sales"],
+                columns=["sales.amount", "sales.region"],
+                join_hints=["sales"],
+            ),
+            synonym_hits=["revenue"],
+            unresolved_identifiers=[],
+        ),
+        selected_tables_override=[
+            {
+                "table": "sales",
+                "columns": [{"name": "amount", "type": "NUMERIC"}, {"name": "region", "type": "TEXT"}],
+                "foreign_keys": [],
+            }
+        ],
+        selected_examples_override=[],
+    )
+    assert "Query plan draft" in prompt
+    assert "- target_tables: sales" in prompt
+    assert "- aggregations: SUM" in prompt

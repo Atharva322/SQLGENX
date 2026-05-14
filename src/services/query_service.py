@@ -20,21 +20,28 @@ from src.llm.client import GeneratedSQL, LLMClient
 from src.models.schemas import (
     AccessedSchema,
     ConfidenceSignals,
+    ConstraintValidationResult,
     ExecutionMeta,
     FeedbackPayload,
     FeedbackResponse,
     HistoryItem,
+    LinkingContext,
+    QueryPlanDraft,
     QueryResponse,
     ReasoningMeta,
 )
-from src.services.prompt_builder import build_prompt
+from src.services.prompt_builder import build_prompt, build_query_plan_draft, select_relevant_feedback_examples
+from src.services.schema_linker import run_schema_linking
 from src.utils.audit import log_blocked_query, log_execution_event
+from src.utils.intermediate_traces import log_intermediate_trace
 from src.validation.alignment import verify_sql_alignment
 from src.validation.multi_query import (
+    compute_complexity_score,
     evaluate_multi_query_agreement,
     should_run_multi_query_validation,
 )
 from src.validation.sanity import analyze_result_sanity
+from src.validation.sql_constraints import validate_sql_identifiers
 
 
 class QueryService:
@@ -209,6 +216,48 @@ class QueryService:
         overlap = len(expected.intersection(used))
         return round(max(0.0, min(1.0, overlap / max(1, len(expected)))), 3)
 
+    def _validate_query_plan(
+        self,
+        plan: QueryPlanDraft,
+        linking: LinkingContext,
+        fallback_plan: QueryPlanDraft,
+    ) -> QueryPlanDraft:
+        allowed_tables = {table.lower() for table in linking.resolved.tables}
+        allowed_columns = {column.lower() for column in linking.resolved.columns}
+        join_hints = {table.lower() for table in linking.resolved.join_hints}
+
+        target_tables = [
+            table for table in plan.target_tables if table.lower() in allowed_tables
+        ] or list(fallback_plan.target_tables)
+        target_columns = [
+            column for column in plan.target_columns if column.lower() in allowed_columns
+        ] or list(fallback_plan.target_columns)
+        grouping = [column for column in plan.grouping if column.lower() in allowed_columns]
+        join_path = [
+            table for table in plan.join_path if table.lower() in allowed_tables
+        ] or list(fallback_plan.join_path)
+        if join_hints:
+            join_path = [table for table in join_path if table.lower() in join_hints] or list(
+                fallback_plan.join_path
+            )
+
+        notes = list(plan.notes)
+        if not plan.target_tables:
+            notes.append("Fallback tables injected from schema-link resolution.")
+        if not plan.target_columns and fallback_plan.target_columns:
+            notes.append("Fallback columns injected from schema-link resolution.")
+
+        return QueryPlanDraft(
+            intent=plan.intent or fallback_plan.intent,
+            target_tables=target_tables,
+            target_columns=target_columns,
+            grouping=grouping or list(fallback_plan.grouping),
+            aggregations=list(plan.aggregations or fallback_plan.aggregations),
+            filters=list(plan.filters or fallback_plan.filters),
+            join_path=join_path,
+            notes=notes or list(fallback_plan.notes),
+        )
+
     def _build_response(
         self,
         query_id: str,
@@ -225,8 +274,14 @@ class QueryService:
         stage_latencies_ms: dict[str, int] | None = None,
         llm_token_usage: dict[str, Any] | None = None,
         reasoning: ReasoningMeta | None = None,
+        linking_meta: LinkingContext | None = None,
+        constraint_meta: ConstraintValidationResult | None = None,
     ) -> QueryResponse:
-        prompt = build_prompt(question, connection_id=connection_id)
+        prompt = build_prompt(
+            question,
+            connection_id=connection_id,
+            linking_context=linking_meta,
+        )
         back_translated_question = self.llm.back_translate_sql(
             sql=guarded_sql, prompt_context=prompt
         )
@@ -249,11 +304,22 @@ class QueryService:
         warnings.extend(sanity.warnings)
 
         multi_query_score = 0.5
-        if self.settings.enable_multi_query_validation and should_run_multi_query_validation(
-            question=question,
-            sql=guarded_sql,
-            threshold=self.settings.multi_query_complexity_threshold,
-        ):
+        multi_query_threshold = self.settings.multi_query_complexity_threshold
+        if self.settings.multi_query_easy_skip_enabled and self.settings.alternative_sql_adaptive_enabled:
+            multi_query_threshold = max(1, min(
+                self.settings.multi_query_complexity_threshold,
+                self.settings.alternative_sql_complexity_threshold,
+            ))
+        should_multi_query = self.settings.enable_multi_query_validation and (
+            should_run_multi_query_validation(
+                question=question,
+                sql=guarded_sql,
+                threshold=multi_query_threshold,
+            )
+            or len(generated.accessed_tables) > 1
+            or " group by " in f" {guarded_sql.lower()} "
+        )
+        if should_multi_query:
             alt_generated = self.llm.generate_alternative_sql(
                 question=question, prompt_context=prompt, primary_sql=guarded_sql
             )
@@ -278,6 +344,8 @@ class QueryService:
             else:
                 multi_query_score = 0.4
                 warnings.append("Alternative validation query blocked by guardrails.")
+        elif self.settings.multi_query_easy_skip_enabled:
+            warnings.append("Policy: multi-query skipped for easy/low-risk prompt.")
 
         schema_coverage = self._schema_coverage_score(
             question=question,
@@ -328,6 +396,8 @@ class QueryService:
                 failure_classification=self._classify_failure(warnings, rows, guarded_sql),
             ),
             reasoning=reasoning or ReasoningMeta(),
+            linking_meta=linking_meta,
+            constraint_meta=constraint_meta,
         )
 
     def process_question(
@@ -345,13 +415,91 @@ class QueryService:
         resolved_connection_id = self._normalize_connection_id(connection_id)
         query_id = self._new_query_id()
         t_prompt = perf_counter()
-        prompt = build_prompt(question, connection_id=resolved_connection_id)
+        schema = get_schema_summary(connection_id=resolved_connection_id)
+        schema_fingerprint = schema.get("schema_fingerprint") or compute_schema_fingerprint(schema)
+        scoped_feedback = select_relevant_feedback_examples(
+            question,
+            connection_id=resolved_connection_id,
+            schema_fingerprint=schema_fingerprint,
+            max_examples=max(5, self.settings.rag_top_k_examples),
+            min_confidence=self.settings.rag_min_feedback_confidence,
+        )
+        linking_artifacts = run_schema_linking(
+            question=question,
+            schema=schema,
+            feedback_examples=scoped_feedback,
+            top_k_schema=self.settings.rag_top_k_schema,
+            top_k_examples=self.settings.rag_top_k_examples,
+        )
+        prompt = build_prompt(
+            question,
+            connection_id=resolved_connection_id,
+            linking_context=linking_artifacts.context,
+            selected_tables_override=linking_artifacts.selected_schema_tables,
+            selected_examples_override=linking_artifacts.selected_examples,
+            include_query_plan_draft=False,
+        )
         stage_latencies_ms["prompt_build_ms"] = int((perf_counter() - t_prompt) * 1000)
 
         reasoning = ReasoningMeta()
         llm_usages: list[dict[str, Any]] = []
         t_generation = perf_counter()
-        if sql_override:
+        complexity_score = compute_complexity_score(question, "")
+        severe_fail_fast = False
+        post_generation_constraint_unanswerable = False
+        alt_skipped_easy = False
+        low_confidence = (
+            linking_artifacts.context.confidence < self.settings.fail_fast_min_link_confidence
+        )
+        unresolved_count = len(linking_artifacts.context.unresolved_identifiers)
+        require_low_confidence = self.settings.fail_fast_require_low_confidence
+        no_resolved_tables = len(linking_artifacts.context.resolved.tables) == 0
+        no_resolved_columns = len(linking_artifacts.context.resolved.columns) == 0
+        fallback_plan = build_query_plan_draft(
+            question,
+            linking_artifacts.context,
+            linking_artifacts.selected_schema_tables,
+        )
+        severe_resolution_failure = (
+            (no_resolved_tables and len(linking_artifacts.selected_schema_tables) == 0)
+            or (
+                no_resolved_columns
+                and unresolved_count >= self.settings.fail_fast_max_unresolved
+                and (low_confidence or not require_low_confidence)
+            )
+            or (
+                linking_artifacts.context.ambiguous
+                and (low_confidence or not require_low_confidence)
+            )
+        )
+        if (
+            self.settings.identifier_resolution_fail_fast_enabled
+            and not sql_override
+            and severe_resolution_failure
+            and (low_confidence or not require_low_confidence)
+        ):
+            severe_fail_fast = True
+            linking_artifacts.context.resolution_status = "severe_fail_fast"
+            generated = GeneratedSQL(
+                sql="UNANSWERABLE",
+                explanation="Insufficient schema-link confidence/resolution to generate safe SQL.",
+                accessed_tables=[],
+                accessed_columns=[],
+                model_confidence=0.0,
+                token_usage={
+                    "provider": "policy",
+                    "model": "fail_fast",
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                },
+            )
+            reasoning.strategy = "severe_fail_fast_unanswerable"
+            reasoning.selected_candidate = "none"
+            reasoning.validator_notes = [
+                "Severe low-confidence identifier resolution triggered pre-generation UNANSWERABLE."
+            ]
+        elif sql_override:
             generated = GeneratedSQL(
                 sql=sql_override or "",
                 explanation="User-edited SQL executed with guardrails.",
@@ -368,26 +516,58 @@ class QueryService:
             )
             reasoning.strategy = "manual_override"
             reasoning.selected_candidate = "user_sql_override"
+            reasoning.query_plan = fallback_plan.model_dump()
         else:
-            primary = self.llm.generate_structured_sql(question=question, prompt_context=prompt)
-            alternative = self.llm.generate_alternative_sql(
-                question=question, prompt_context=prompt, primary_sql=primary.sql
+            generated_plan = self.llm.generate_query_plan(question=question, prompt_context=prompt)
+            llm_usages.append(generated_plan.token_usage)
+            validated_plan = self._validate_query_plan(
+                generated_plan.plan,
+                linking_artifacts.context,
+                fallback_plan=fallback_plan,
             )
-            llm_usages.extend([primary.token_usage, alternative.token_usage])
-            selected_name, generated, candidate_scores, validator_notes = (
-                self._select_candidate_with_validator(
-                    question=question,
-                    prompt=prompt,
-                    candidates=[("primary", primary), ("alternative", alternative)],
-                    max_rows=max_rows,
+            final_prompt = build_prompt(
+                question,
+                connection_id=resolved_connection_id,
+                linking_context=linking_artifacts.context,
+                selected_tables_override=linking_artifacts.selected_schema_tables,
+                selected_examples_override=linking_artifacts.selected_examples,
+                query_plan_override=validated_plan,
+            )
+            primary = self.llm.generate_structured_sql(question=question, prompt_context=final_prompt)
+            llm_usages.append(primary.token_usage)
+            if self.settings.alternative_sql_adaptive_enabled and (
+                complexity_score < self.settings.alternative_sql_complexity_threshold
+            ):
+                alt_skipped_easy = True
+                generated = primary
+                reasoning = ReasoningMeta(
+                    strategy="primary_only_easy_path",
+                    selected_candidate="primary",
+                    candidate_scores=[],
+                    validator_notes=["Alternative SQL skipped for easy/low-risk prompt."],
+                    query_plan=validated_plan.model_dump(),
                 )
-            )
-            reasoning = ReasoningMeta(
-                strategy="planner_validator_selection",
-                selected_candidate=selected_name,
-                candidate_scores=candidate_scores,
-                validator_notes=validator_notes,
-            )
+            else:
+                alternative = self.llm.generate_alternative_sql(
+                    question=question, prompt_context=final_prompt, primary_sql=primary.sql
+                )
+                llm_usages.append(alternative.token_usage)
+                selected_name, generated, candidate_scores, validator_notes = (
+                    self._select_candidate_with_validator(
+                        question=question,
+                        prompt=final_prompt,
+                        candidates=[("primary", primary), ("alternative", alternative)],
+                        max_rows=max_rows,
+                    )
+                )
+                reasoning = ReasoningMeta(
+                    strategy="planner_validator_selection",
+                    selected_candidate=selected_name,
+                    candidate_scores=candidate_scores,
+                    validator_notes=validator_notes,
+                    query_plan=validated_plan.model_dump(),
+                )
+        constraint_meta = ConstraintValidationResult(passed=True)
         stage_latencies_ms["generation_and_selection_ms"] = int(
             (perf_counter() - t_generation) * 1000
         )
@@ -413,6 +593,8 @@ class QueryService:
                 stage_latencies_ms=stage_latencies_ms,
                 llm_token_usage=self._sum_token_usage(llm_usages),
                 reasoning=reasoning,
+                linking_meta=linking_artifacts.context,
+                constraint_meta=constraint_meta,
             )
             self.history.append(
                 HistoryItem(
@@ -428,6 +610,8 @@ class QueryService:
                     results=response.results,
                     execution_meta=response.execution_meta,
                     reasoning=response.reasoning,
+                    linking_meta=response.linking_meta,
+                    constraint_meta=response.constraint_meta,
                     feedback=None,
                 )
             )
@@ -439,6 +623,14 @@ class QueryService:
                 "Model returned UNANSWERABLE for missing schema coverage or ambiguity.",
                 "No SQL executed.",
             ]
+            if severe_fail_fast:
+                warnings = [
+                    "Severe fail-fast UNANSWERABLE due to clearly insufficient low-confidence identifier resolution.",
+                    f"Unresolved identifiers: {', '.join(linking_artifacts.context.unresolved_identifiers) or 'none'}",
+                    "No SQL executed.",
+                ]
+            if alt_skipped_easy:
+                warnings.append("Policy: alternative candidate generation skipped for easy prompt.")
             response = self._build_response(
                 query_id=query_id,
                 connection_id=resolved_connection_id,
@@ -454,6 +646,8 @@ class QueryService:
                 stage_latencies_ms=stage_latencies_ms,
                 llm_token_usage=self._sum_token_usage(llm_usages),
                 reasoning=reasoning,
+                linking_meta=linking_artifacts.context,
+                constraint_meta=constraint_meta,
             )
             self.history.append(
                 HistoryItem(
@@ -469,6 +663,8 @@ class QueryService:
                     results=response.results,
                     execution_meta=response.execution_meta,
                     reasoning=response.reasoning,
+                    linking_meta=response.linking_meta,
+                    constraint_meta=response.constraint_meta,
                     feedback=None,
                 )
             )
@@ -490,6 +686,80 @@ class QueryService:
         syntax_valid = initial_guardrail.syntax_valid
 
         if initial_guardrail.allowed:
+            if self.settings.constrained_sql_enabled and self.settings.constrained_sql_strict_identifiers:
+                constraint_meta = validate_sql_identifiers(
+                    guarded_sql,
+                    linking_artifacts.context,
+                    strict_join_grounding=self.settings.join_grounding_strict_enabled,
+                )
+                if not constraint_meta.passed:
+                    post_generation_constraint_unanswerable = True
+                    warnings.extend(constraint_meta.reasons)
+                    warnings.append("Converted to UNANSWERABLE due to unresolved-link violation.")
+                    linking_artifacts.context.join_grounding_status = (
+                        "violation"
+                        if constraint_meta.violation_type == "join_not_grounded"
+                        else "unknown"
+                    )
+                    response = self._build_response(
+                        query_id=query_id,
+                        connection_id=resolved_connection_id,
+                        session_id=resolved_session_id,
+                        question=question,
+                        generated=generated,
+                        guarded_sql="UNANSWERABLE",
+                        syntax_valid=False,
+                        warnings=warnings,
+                        rows=[],
+                        explain=[],
+                        elapsed_ms=0,
+                        stage_latencies_ms=stage_latencies_ms,
+                        llm_token_usage=self._sum_token_usage(llm_usages),
+                        reasoning=reasoning,
+                        linking_meta=linking_artifacts.context,
+                        constraint_meta=constraint_meta,
+                    )
+                    self.history.append(
+                        HistoryItem(
+                            query_id=response.query_id,
+                            connection_id=response.connection_id,
+                            session_id=response.session_id,
+                            question=question,
+                            sql=response.sql,
+                            explanation=response.explanation,
+                            confidence=response.confidence,
+                            signals=response.signals,
+                            warnings=response.warnings,
+                            results=response.results,
+                            execution_meta=response.execution_meta,
+                            reasoning=response.reasoning,
+                            linking_meta=response.linking_meta,
+                            constraint_meta=response.constraint_meta,
+                            feedback=None,
+                        )
+                    )
+                    log_intermediate_trace(
+                        {
+                            "query_id": query_id,
+                            "connection_id": resolved_connection_id,
+                            "session_id": resolved_session_id,
+                            "schema_fingerprint": schema_fingerprint,
+                            "question": question,
+                            "severe_fail_fast": severe_fail_fast,
+                            "alt_skipped_easy": alt_skipped_easy,
+                            "multi_query_skipped_easy": True,
+                            "join_grounding_violation": (
+                                constraint_meta.violation_type == "join_not_grounded"
+                            ),
+                            "post_generation_constraint_unanswerable": post_generation_constraint_unanswerable,
+                            "constraint_violation_type": constraint_meta.violation_type,
+                            "sql": response.sql,
+                            "failure_classification": response.execution_meta.failure_classification,
+                        }
+                    )
+                    return response
+                if self.settings.join_grounding_strict_enabled:
+                    linking_artifacts.context.join_grounding_status = "grounded"
             try:
                 t_explain = perf_counter()
                 explain = self._run_explain(guarded_sql, connection_id=resolved_connection_id)
@@ -554,6 +824,8 @@ class QueryService:
             stage_latencies_ms=stage_latencies_ms,
             llm_token_usage=self._sum_token_usage(llm_usages),
             reasoning=reasoning,
+            linking_meta=linking_artifacts.context,
+            constraint_meta=constraint_meta,
         )
         response.execution_meta.stage_latencies_ms["total_pipeline_ms"] = int(
             (perf_counter() - started_at) * 1000
@@ -585,8 +857,37 @@ class QueryService:
                 results=response.results,
                 execution_meta=response.execution_meta,
                 reasoning=response.reasoning,
+                linking_meta=response.linking_meta,
+                constraint_meta=response.constraint_meta,
                 feedback=None,
             )
+        )
+        log_intermediate_trace(
+            {
+                "query_id": query_id,
+                "connection_id": resolved_connection_id,
+                "session_id": resolved_session_id,
+                "schema_fingerprint": schema_fingerprint,
+                "question": question,
+                "normalized_question": linking_artifacts.context.normalized_question,
+                "linker_confidence": linking_artifacts.context.confidence,
+                "ambiguous": linking_artifacts.context.ambiguous,
+                "resolved_tables": linking_artifacts.context.resolved.tables,
+                "resolved_columns": linking_artifacts.context.resolved.columns,
+                "synonym_hits": linking_artifacts.context.synonym_hits,
+                "severe_fail_fast": severe_fail_fast,
+                "alt_skipped_easy": alt_skipped_easy,
+                "multi_query_skipped_easy": any(
+                    "multi-query skipped for easy" in warning.lower() for warning in response.warnings
+                ),
+                "join_grounding_violation": constraint_meta.violation_type == "join_not_grounded",
+                "post_generation_constraint_unanswerable": post_generation_constraint_unanswerable,
+                "constraint_violation_type": constraint_meta.violation_type,
+                "constraint_passed": constraint_meta.passed,
+                "constraint_blocked_identifiers": constraint_meta.blocked_identifiers,
+                "sql": response.sql,
+                "failure_classification": response.execution_meta.failure_classification,
+            }
         )
         return response
 

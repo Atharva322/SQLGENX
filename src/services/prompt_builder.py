@@ -4,6 +4,7 @@ import re
 
 from src.config.settings import get_settings
 from src.db.schema_introspector import compute_schema_fingerprint, get_schema_summary
+from src.models.schemas import LinkingContext, QueryPlanDraft
 from src.services.rag_retriever import retrieve_context
 
 
@@ -144,7 +145,72 @@ def select_relevant_feedback_examples(
     return [entry[3] for entry in candidates[:max_examples]]
 
 
-def build_prompt(question: str, connection_id: str | None = None) -> str:
+def _build_query_plan_draft(
+    question: str,
+    linking_context: LinkingContext | None,
+    selected_tables: list[dict],
+) -> QueryPlanDraft:
+    lowered = question.lower()
+    target_tables = list(linking_context.resolved.tables) if linking_context else []
+    target_columns = list(linking_context.resolved.columns) if linking_context else []
+    grouping: list[str] = []
+    aggregations: list[str] = []
+    filters: list[str] = []
+    join_path = list(linking_context.resolved.join_hints) if linking_context else []
+    notes: list[str] = []
+
+    if " by " in lowered:
+        for column in target_columns:
+            col_name = column.split(".")[-1].lower()
+            if col_name in lowered:
+                grouping.append(column)
+    if any(token in lowered for token in {"total", "sum", "revenue"}):
+        aggregations.append("SUM")
+    if any(token in lowered for token in {"average", "avg", "mean"}):
+        aggregations.append("AVG")
+    if any(token in lowered for token in {"count", "number of", "how many"}):
+        aggregations.append("COUNT")
+    if any(token in lowered for token in {"top", "rank", "highest", "lowest"}):
+        notes.append("Use ORDER BY with LIMIT for ranking intent.")
+    if any(token in lowered for token in {"last_", "current_", "today", "month", "quarter", "year"}):
+        filters.append("Apply time filter if matching date/timestamp column exists.")
+    if len(target_tables) > 1 and not join_path:
+        join_path = [table.get("table", "") for table in selected_tables if table.get("table")]
+        notes.append("Prefer FK-grounded joins across selected tables only.")
+    if linking_context and linking_context.unresolved_identifiers:
+        notes.append(
+            f"Unresolved business terms remain: {', '.join(linking_context.unresolved_identifiers[:4])}."
+        )
+
+    return QueryPlanDraft(
+        intent="select",
+        target_tables=target_tables,
+        target_columns=target_columns,
+        grouping=sorted(set(grouping)),
+        aggregations=sorted(set(aggregations)),
+        filters=filters,
+        join_path=join_path,
+        notes=notes,
+    )
+
+
+def build_query_plan_draft(
+    question: str,
+    linking_context: LinkingContext | None,
+    selected_tables: list[dict],
+) -> QueryPlanDraft:
+    return _build_query_plan_draft(question, linking_context, selected_tables)
+
+
+def build_prompt(
+    question: str,
+    connection_id: str | None = None,
+    linking_context: LinkingContext | None = None,
+    selected_tables_override: list[dict] | None = None,
+    selected_examples_override: list[dict] | None = None,
+    query_plan_override: QueryPlanDraft | None = None,
+    include_query_plan_draft: bool = True,
+) -> str:
     settings = get_settings()
     schema = get_schema_summary(connection_id=connection_id)
     all_tables = schema.get("tables", [])
@@ -166,9 +232,9 @@ def build_prompt(question: str, connection_id: str | None = None) -> str:
         "schema_method": "none",
         "example_method": "none",
     }
-    selected_tables = all_tables[: settings.rag_top_k_schema]
-    selected_examples = scoped_feedback[: settings.rag_top_k_examples]
-    if settings.rag_enabled:
+    selected_tables = selected_tables_override or all_tables[: settings.rag_top_k_schema]
+    selected_examples = selected_examples_override or scoped_feedback[: settings.rag_top_k_examples]
+    if settings.rag_enabled and not selected_tables_override and not selected_examples_override:
         rag = retrieve_context(
             question=question,
             schema=schema,
@@ -180,13 +246,21 @@ def build_prompt(question: str, connection_id: str | None = None) -> str:
         selected_examples = rag.selected_examples
         retrieval_meta = rag.retrieval_meta
 
+    if linking_context:
+        selected_table_names = set(linking_context.resolved.tables)
+        selected_tables = [t for t in selected_tables if t.get("table") in selected_table_names] or selected_tables
+
     for table in selected_tables:
         table_name = table.get("table", "")
         columns = table.get("columns", [])
-        col_blob = ", ".join(
-            f"{column.get('name')} ({column.get('type')})" for column in columns
+        col_blob = ", ".join(f"{column.get('name')} ({column.get('type')})" for column in columns)
+        fk_blob = ", ".join(
+            f"{fk.get('constrained_columns', [])}->{fk.get('referred_table')}.{fk.get('referred_columns', [])}"
+            for fk in table.get("foreign_keys", [])
         )
-        schema_lines.append(f"- {table_name}: {col_blob}")
+        schema_lines.append(
+            f"- table={table_name} | columns=[{col_blob}] | fk_hints=[{fk_blob or 'none'}] | business_desc=core domain entity"
+        )
 
     schema_text = "\n".join(schema_lines) if schema_lines else "- no schema available"
     fewshots = selected_examples
@@ -202,6 +276,34 @@ def build_prompt(question: str, connection_id: str | None = None) -> str:
             + "\n"
         )
 
+    linking_text = ""
+    query_plan_text = ""
+    if linking_context:
+        plan = query_plan_override or _build_query_plan_draft(question, linking_context, selected_tables)
+        linking_text = (
+            "\nSchema linking context:\n"
+            f"- normalized_question: {linking_context.normalized_question}\n"
+            f"- linker_confidence: {linking_context.confidence}\n"
+            f"- ambiguous: {linking_context.ambiguous}\n"
+            f"- ambiguity_reasons: {', '.join(linking_context.ambiguity_reasons) or 'none'}\n"
+            f"- allowed_tables: {', '.join(linking_context.resolved.tables) or 'none'}\n"
+            f"- allowed_columns: {', '.join(linking_context.resolved.columns) or 'none'}\n"
+            f"- synonym_hits: {', '.join(linking_context.synonym_hits) or 'none'}\n"
+            f"- join_hints: {', '.join(linking_context.resolved.join_hints) or 'none'}\n"
+        )
+        if include_query_plan_draft:
+            query_plan_text = (
+                "\nQuery plan draft:\n"
+                f"- intent: {plan.intent}\n"
+                f"- target_tables: {', '.join(plan.target_tables) or 'none'}\n"
+                f"- target_columns: {', '.join(plan.target_columns) or 'none'}\n"
+                f"- grouping: {', '.join(plan.grouping) or 'none'}\n"
+                f"- aggregations: {', '.join(plan.aggregations) or 'none'}\n"
+                f"- filters: {', '.join(plan.filters) or 'none'}\n"
+                f"- join_path: {', '.join(plan.join_path) or 'none'}\n"
+                f"- notes: {', '.join(plan.notes) or 'none'}\n"
+            )
+
     return (
         "You are a SQL assistant. Generate safe read-only SQL only.\n"
         "Rules:\n"
@@ -212,10 +314,14 @@ def build_prompt(question: str, connection_id: str | None = None) -> str:
         "5) Exception to rule 3: if a requested grouping label is unavailable but an unambiguous surrogate"
         " key exists (such as *_id), group by that key instead of returning UNANSWERABLE.\n"
         "6) Only output SELECT/WITH SQL when answerable.\n\n"
+        "7) Treat schema linking allowed_tables/allowed_columns as hard constraints.\n\n"
+        "8) Follow the query plan draft unless it conflicts with schema reality; never invent missing joins or metrics.\n\n"
         "RAG retrieval metadata:\n"
         f"- mode: {retrieval_meta.get('mode', 'none')}\n"
         f"- schema retrieval: {retrieval_meta.get('schema_method', 'none')}\n"
         f"- example retrieval: {retrieval_meta.get('example_method', 'none')}\n\n"
+        f"{linking_text}\n"
+        f"{query_plan_text}\n"
         f"Question: {question}\n\n"
         "Relevant schema:\n"
         f"{schema_text}\n"
