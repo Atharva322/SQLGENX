@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+from pathlib import Path
 
 from src.api.main import app
 
@@ -17,7 +18,16 @@ def test_history_filters_by_session() -> None:
     assert all(item["session_id"] == "s1" for item in items)
 
 
-def test_feedback_endpoint_stores_verdict() -> None:
+def test_feedback_endpoint_stores_verdict(monkeypatch) -> None:
+    from src.api import main
+
+    target_path = Path("logs") / "test_feedback_incorrect.jsonl"
+    target_path.unlink(missing_ok=True)
+    monkeypatch.setattr(
+        main.service,
+        "_feedback_target_file",
+        lambda verdict: target_path,
+    )
     client = TestClient(app)
     generated = client.post(
         "/v1/query", json={"question": "What is total sales by region?", "session_id": "s_fb"}
@@ -38,3 +48,5 @@ def test_feedback_endpoint_stores_verdict() -> None:
     fb_body = feedback.json()
     assert fb_body["stored"] is True
     assert fb_body["query_id"] == body["query_id"]
+    assert target_path.exists()
+    target_path.unlink(missing_ok=True)

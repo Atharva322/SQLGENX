@@ -1,0 +1,93 @@
+{
+  "phase": "phase_0",
+  "profile": "deterministic_fake",
+  "generated_at_utc": "2026-08-10T06:13:51Z",
+  "base_commit": "2653e44",
+  "head_commit": "290b01c",
+  "case_count": 50,
+  "sample_count": 24000,
+  "matrix": {
+    "rag_enabled": [false, true],
+    "multi_query_validation": [false, true],
+    "concurrency": [1, 5],
+    "process_state": ["cold", "warm"],
+    "repetitions": 30
+  },
+  "notes": [
+    "Sanitized checked-in summary derived from the deterministic benchmark profile.",
+    "This profile uses a local fake request runner and does not make live LLM or database calls.",
+    "Live-provider evaluation was attempted locally but did not complete within 300 seconds in the available environment."
+  ],
+  "bucket_summary": {
+    "simple_filter": {
+      "samples": 4800,
+      "p50_ms": 0.001,
+      "p95_ms": 0.001,
+      "p99_ms": 0.002,
+      "error_rate": 0.0,
+      "tokens": 1092480,
+      "llm_calls": 9600,
+      "db_round_trips": 14400
+    },
+    "aggregation": {
+      "samples": 4800,
+      "p50_ms": 0.001,
+      "p95_ms": 0.001,
+      "p99_ms": 0.003,
+      "error_rate": 0.0,
+      "tokens": 1080960,
+      "llm_calls": 12000,
+      "db_round_trips": 14400
+    },
+    "join": {
+      "samples": 4800,
+      "p50_ms": 0.001,
+      "p95_ms": 0.001,
+      "p99_ms": 0.003,
+      "error_rate": 0.0,
+      "tokens": 1127040,
+      "llm_calls": 12000,
+      "db_round_trips": 14400
+    },
+    "ambiguous": {
+      "samples": 2400,
+      "p50_ms": 0.001,
+      "p95_ms": 0.001,
+      "p99_ms": 0.002,
+      "error_rate": 0.0,
+      "tokens": 521280,
+      "llm_calls": 4800,
+      "db_round_trips": 0
+    },
+    "unanswerable": {
+      "samples": 2400,
+      "p50_ms": 0.001,
+      "p95_ms": 0.001,
+      "p99_ms": 0.002,
+      "error_rate": 0.0,
+      "tokens": 532800,
+      "llm_calls": 4800,
+      "db_round_trips": 0
+    },
+    "unsafe": {
+      "samples": 2400,
+      "p50_ms": 0.001,
+      "p95_ms": 0.001,
+      "p99_ms": 0.002,
+      "error_rate": 0.0,
+      "tokens": 544320,
+      "llm_calls": 0,
+      "db_round_trips": 0
+    },
+    "repeated": {
+      "samples": 2400,
+      "p50_ms": 0.001,
+      "p95_ms": 0.001,
+      "p99_ms": 0.003,
+      "error_rate": 0.0,
+      "tokens": 544320,
+      "llm_calls": 4800,
+      "db_round_trips": 7200
+    }
+  }
+}
