@@ -23,6 +23,7 @@ logs/
 *.db
 coverage.xml
 htmlcov/
+benchmarks/results/
 
 # OS and editors
 .DS_Store

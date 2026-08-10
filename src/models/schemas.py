@@ -30,6 +30,15 @@ class ExecutionMeta(BaseModel):
     rows_returned: int = 0
     explain_plan: list[str] = Field(default_factory=list)
     stage_latencies_ms: dict[str, int] = Field(default_factory=dict)
+    stage_durations_ms: dict[str, int] = Field(default_factory=dict)
+    total_duration_ms: int = 0
+    trace_coverage_ratio: float = 0.0
+    llm_call_count: int = 0
+    db_round_trip_count: int = 0
+    cache_state: dict[str, Any] = Field(default_factory=dict)
+    validation_level: str = "standard"
+    timeout_stage: str | None = None
+    failure_stage: str | None = None
     llm_token_usage: dict[str, Any] = Field(default_factory=dict)
     failure_classification: str | None = None
 

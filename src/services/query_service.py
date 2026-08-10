@@ -1,4 +1,5 @@
 from pathlib import Path
+from contextlib import nullcontext
 from time import perf_counter
 from uuid import uuid4
 import json
@@ -30,6 +31,7 @@ from src.models.schemas import (
     QueryResponse,
     ReasoningMeta,
 )
+from src.observability.request_trace import RequestTrace
 from src.services.prompt_builder import build_prompt, build_query_plan_draft, select_relevant_feedback_examples
 from src.services.schema_linker import run_schema_linking
 from src.utils.audit import log_blocked_query, log_execution_event
@@ -94,6 +96,7 @@ class QueryService:
         prompt: str,
         candidates: list[tuple[str, GeneratedSQL]],
         max_rows: int,
+        trace: RequestTrace | None = None,
     ) -> tuple[str, GeneratedSQL, list[dict[str, Any]], list[str]]:
         scored: list[dict[str, Any]] = []
         notes: list[str] = []
@@ -105,10 +108,13 @@ class QueryService:
                 explain_estimated_rows=None,
                 explain_row_limit=self.settings.max_explain_rows,
             )
-            back_q = self.llm.back_translate_sql(
-                sql=pre_guardrail.sql if pre_guardrail.allowed else candidate.sql,
-                prompt_context=prompt,
-            )
+            with (trace.timer("candidate_back_translation") if trace else nullcontext()):
+                back_q = self.llm.back_translate_sql(
+                    sql=pre_guardrail.sql if pre_guardrail.allowed else candidate.sql,
+                    prompt_context=prompt,
+                )
+            if trace:
+                trace.increment_llm_calls()
             alignment = verify_sql_alignment(
                 original_question=question, back_translated_question=back_q
             )
@@ -145,11 +151,17 @@ class QueryService:
             return "hallucination_risk"
         return "none"
 
-    def _run_explain(self, sql: str, connection_id: str) -> list[str]:
+    def _run_explain(
+        self, sql: str, connection_id: str, trace: RequestTrace | None = None
+    ) -> list[str]:
         SessionLocal = get_session_factory(connection_id)
         with SessionLocal() as session:
             session.execute(text("SET TRANSACTION READ ONLY"))
+            if trace:
+                trace.increment_db_round_trips()
             plan_result = session.execute(text(f"EXPLAIN {sql}"))
+            if trace:
+                trace.increment_db_round_trips()
             plan_lines: list[str] = []
             for row in plan_result.fetchall():
                 plan_lines.append(" | ".join(str(value) for value in row))
@@ -162,6 +174,7 @@ class QueryService:
         max_rows: int,
         connection_id: str,
         precomputed_explain: list[str] | None = None,
+        trace: RequestTrace | None = None,
     ) -> tuple[list[dict], list[str], int]:
         start = perf_counter()
         explain_plan: list[str] = precomputed_explain or []
@@ -171,13 +184,19 @@ class QueryService:
         try:
             with SessionLocal() as session:
                 session.execute(text("SET TRANSACTION READ ONLY"))
+                if trace:
+                    trace.increment_db_round_trips()
 
                 if not explain_plan:
                     plan_result = session.execute(text(f"EXPLAIN {sql}"))
+                    if trace:
+                        trace.increment_db_round_trips()
                     for row in plan_result.fetchall():
                         explain_plan.append(" | ".join(str(value) for value in row))
 
                 result = session.execute(text(sql))
+                if trace:
+                    trace.increment_db_round_trips()
                 fetched_rows = result.fetchall()
                 keys = list(result.keys())
                 rows_df = pd.DataFrame(fetched_rows, columns=keys)
@@ -185,6 +204,8 @@ class QueryService:
                     rows_df = rows_df.head(max_rows)
                 session.rollback()
         except SQLAlchemyError as exc:
+            if trace:
+                trace.mark_failure("execution")
             rows_df = pd.DataFrame([{"error": str(exc)}])
 
         elapsed_ms = int((perf_counter() - start) * 1000)
@@ -276,19 +297,23 @@ class QueryService:
         reasoning: ReasoningMeta | None = None,
         linking_meta: LinkingContext | None = None,
         constraint_meta: ConstraintValidationResult | None = None,
+        trace: RequestTrace | None = None,
     ) -> QueryResponse:
-        prompt = build_prompt(
-            question,
-            connection_id=connection_id,
-            linking_context=linking_meta,
-        )
-        back_translated_question = self.llm.back_translate_sql(
-            sql=guarded_sql, prompt_context=prompt
-        )
-        alignment = verify_sql_alignment(
-            original_question=question,
-            back_translated_question=back_translated_question,
-        )
+        with (trace.timer("response_validation") if trace else nullcontext()):
+            prompt = build_prompt(
+                question,
+                connection_id=connection_id,
+                linking_context=linking_meta,
+            )
+            back_translated_question = self.llm.back_translate_sql(
+                sql=guarded_sql, prompt_context=prompt
+            )
+            if trace:
+                trace.increment_llm_calls()
+            alignment = verify_sql_alignment(
+                original_question=question,
+                back_translated_question=back_translated_question,
+            )
         warnings.extend(alignment.warnings)
         log_execution_event(
             "alignment_check",
@@ -320,9 +345,12 @@ class QueryService:
             or " group by " in f" {guarded_sql.lower()} "
         )
         if should_multi_query:
-            alt_generated = self.llm.generate_alternative_sql(
-                question=question, prompt_context=prompt, primary_sql=guarded_sql
-            )
+            with (trace.timer("multi_query_validation") if trace else nullcontext()):
+                alt_generated = self.llm.generate_alternative_sql(
+                    question=question, prompt_context=prompt, primary_sql=guarded_sql
+                )
+            if trace:
+                trace.increment_llm_calls()
             alt_guardrail = apply_guardrails(
                 sql=alt_generated.sql,
                 max_rows=self.settings.max_result_rows,
@@ -335,6 +363,7 @@ class QueryService:
                     alt_guardrail.sql,
                     max_rows=self.settings.max_result_rows,
                     connection_id=connection_id,
+                    trace=trace,
                 )
                 multi_query = evaluate_multi_query_agreement(rows, alt_rows)
                 multi_query_score = multi_query.score
@@ -347,12 +376,15 @@ class QueryService:
         elif self.settings.multi_query_easy_skip_enabled:
             warnings.append("Policy: multi-query skipped for easy/low-risk prompt.")
 
-        schema_coverage = self._schema_coverage_score(
-            question=question,
-            accessed_tables=generated.accessed_tables,
-            accessed_columns=generated.accessed_columns,
-            connection_id=connection_id,
-        )
+        with (trace.timer("schema_coverage_validation") if trace else nullcontext()):
+            schema_coverage = self._schema_coverage_score(
+                question=question,
+                accessed_tables=generated.accessed_tables,
+                accessed_columns=generated.accessed_columns,
+                connection_id=connection_id,
+            )
+            if trace:
+                trace.increment_db_round_trips()
 
         signals = ConfidenceSignals(
             syntax_validity=1.0 if syntax_valid else 0.0,
@@ -373,6 +405,8 @@ class QueryService:
             3,
         )
 
+        trace_stage_durations = dict(trace.stage_durations_ms) if trace else (stage_latencies_ms or {})
+        total_duration_ms = trace.total_duration_ms() if trace else 0
         return QueryResponse(
             query_id=query_id,
             connection_id=connection_id,
@@ -391,7 +425,16 @@ class QueryService:
                 execution_time_ms=elapsed_ms,
                 rows_returned=len(rows),
                 explain_plan=explain,
-                stage_latencies_ms=stage_latencies_ms or {},
+                stage_latencies_ms=stage_latencies_ms or trace_stage_durations,
+                stage_durations_ms=trace_stage_durations,
+                total_duration_ms=total_duration_ms,
+                trace_coverage_ratio=trace.coverage_ratio() if trace else 0.0,
+                llm_call_count=trace.llm_call_count if trace else int((llm_token_usage or {}).get("calls", 0) or 0),
+                db_round_trip_count=trace.db_round_trip_count if trace else 0,
+                cache_state=trace.cache_state if trace else {},
+                validation_level=trace.validation_level if trace else "standard",
+                timeout_stage=trace.timeout_stage if trace else None,
+                failure_stage=trace.failure_stage if trace else None,
                 llm_token_usage=llm_token_usage or {},
                 failure_classification=self._classify_failure(warnings, rows, guarded_sql),
             ),
@@ -409,37 +452,47 @@ class QueryService:
         sql_override: str | None = None,
     ) -> QueryResponse:
         started_at = perf_counter()
-        stage_latencies_ms: dict[str, int] = {}
         max_rows = row_limit_override or self.settings.max_result_rows
         resolved_session_id = self._normalize_session_id(session_id)
         resolved_connection_id = self._normalize_connection_id(connection_id)
         query_id = self._new_query_id()
-        t_prompt = perf_counter()
-        schema = get_schema_summary(connection_id=resolved_connection_id)
-        schema_fingerprint = schema.get("schema_fingerprint") or compute_schema_fingerprint(schema)
-        scoped_feedback = select_relevant_feedback_examples(
-            question,
-            connection_id=resolved_connection_id,
-            schema_fingerprint=schema_fingerprint,
-            max_examples=max(5, self.settings.rag_top_k_examples),
-            min_confidence=self.settings.rag_min_feedback_confidence,
-        )
-        linking_artifacts = run_schema_linking(
-            question=question,
-            schema=schema,
-            feedback_examples=scoped_feedback,
-            top_k_schema=self.settings.rag_top_k_schema,
-            top_k_examples=self.settings.rag_top_k_examples,
-        )
-        prompt = build_prompt(
-            question,
-            connection_id=resolved_connection_id,
-            linking_context=linking_artifacts.context,
-            selected_tables_override=linking_artifacts.selected_schema_tables,
-            selected_examples_override=linking_artifacts.selected_examples,
-            include_query_plan_draft=False,
-        )
-        stage_latencies_ms["prompt_build_ms"] = int((perf_counter() - t_prompt) * 1000)
+        trace = RequestTrace(request_id=query_id)
+        stage_latencies_ms = trace.stage_durations_ms
+        with trace.timer("prompt_build_ms"):
+            schema = get_schema_summary(connection_id=resolved_connection_id)
+            trace.increment_db_round_trips()
+            schema_fingerprint = schema.get("schema_fingerprint") or compute_schema_fingerprint(schema)
+            scoped_feedback = select_relevant_feedback_examples(
+                question,
+                connection_id=resolved_connection_id,
+                schema_fingerprint=schema_fingerprint,
+                max_examples=max(5, self.settings.rag_top_k_examples),
+                min_confidence=self.settings.rag_min_feedback_confidence,
+            )
+            linking_artifacts = run_schema_linking(
+                question=question,
+                schema=schema,
+                feedback_examples=scoped_feedback,
+                top_k_schema=self.settings.rag_top_k_schema,
+                top_k_examples=self.settings.rag_top_k_examples,
+            )
+            trace.set_cache_state(
+                "retrieval",
+                {
+                    "schema_fingerprint": schema_fingerprint,
+                    "schema_tables": len(schema.get("tables", [])),
+                    "feedback_examples": len(scoped_feedback),
+                    "rag_enabled": getattr(self.settings, "rag_enabled", False),
+                },
+            )
+            prompt = build_prompt(
+                question,
+                connection_id=resolved_connection_id,
+                linking_context=linking_artifacts.context,
+                selected_tables_override=linking_artifacts.selected_schema_tables,
+                selected_examples_override=linking_artifacts.selected_examples,
+                include_query_plan_draft=False,
+            )
 
         reasoning = ReasoningMeta()
         llm_usages: list[dict[str, Any]] = []
@@ -519,6 +572,7 @@ class QueryService:
             reasoning.query_plan = fallback_plan.model_dump()
         else:
             generated_plan = self.llm.generate_query_plan(question=question, prompt_context=prompt)
+            trace.increment_llm_calls()
             llm_usages.append(generated_plan.token_usage)
             validated_plan = self._validate_query_plan(
                 generated_plan.plan,
@@ -534,6 +588,7 @@ class QueryService:
                 query_plan_override=validated_plan,
             )
             primary = self.llm.generate_structured_sql(question=question, prompt_context=final_prompt)
+            trace.increment_llm_calls()
             llm_usages.append(primary.token_usage)
             if self.settings.alternative_sql_adaptive_enabled and (
                 complexity_score < self.settings.alternative_sql_complexity_threshold
@@ -551,6 +606,7 @@ class QueryService:
                 alternative = self.llm.generate_alternative_sql(
                     question=question, prompt_context=final_prompt, primary_sql=primary.sql
                 )
+                trace.increment_llm_calls()
                 llm_usages.append(alternative.token_usage)
                 selected_name, generated, candidate_scores, validator_notes = (
                     self._select_candidate_with_validator(
@@ -558,6 +614,7 @@ class QueryService:
                         prompt=final_prompt,
                         candidates=[("primary", primary), ("alternative", alternative)],
                         max_rows=max_rows,
+                        trace=trace,
                     )
                 )
                 reasoning = ReasoningMeta(
@@ -574,6 +631,7 @@ class QueryService:
 
         intent_reasons = detect_malicious_prompt_intent(question)
         if intent_reasons:
+            trace.mark_failure("guardrail")
             guarded_sql = generated.sql
             warnings = intent_reasons + [
                 "Query blocked due to malicious/destructive user intent."
@@ -595,6 +653,7 @@ class QueryService:
                 reasoning=reasoning,
                 linking_meta=linking_artifacts.context,
                 constraint_meta=constraint_meta,
+                trace=trace,
             )
             self.history.append(
                 HistoryItem(
@@ -619,6 +678,7 @@ class QueryService:
             return response
 
         if generated.sql.strip().upper() == "UNANSWERABLE":
+            trace.mark_failure("unanswerable")
             warnings = [
                 "Model returned UNANSWERABLE for missing schema coverage or ambiguity.",
                 "No SQL executed.",
@@ -648,6 +708,7 @@ class QueryService:
                 reasoning=reasoning,
                 linking_meta=linking_artifacts.context,
                 constraint_meta=constraint_meta,
+                trace=trace,
             )
             self.history.append(
                 HistoryItem(
@@ -693,6 +754,7 @@ class QueryService:
                     strict_join_grounding=self.settings.join_grounding_strict_enabled,
                 )
                 if not constraint_meta.passed:
+                    trace.mark_failure("constraint_validation")
                     post_generation_constraint_unanswerable = True
                     warnings.extend(constraint_meta.reasons)
                     warnings.append("Converted to UNANSWERABLE due to unresolved-link violation.")
@@ -718,6 +780,7 @@ class QueryService:
                         reasoning=reasoning,
                         linking_meta=linking_artifacts.context,
                         constraint_meta=constraint_meta,
+                        trace=trace,
                     )
                     self.history.append(
                         HistoryItem(
@@ -762,10 +825,13 @@ class QueryService:
                     linking_artifacts.context.join_grounding_status = "grounded"
             try:
                 t_explain = perf_counter()
-                explain = self._run_explain(guarded_sql, connection_id=resolved_connection_id)
+                explain = self._run_explain(
+                    guarded_sql, connection_id=resolved_connection_id, trace=trace
+                )
                 estimated_rows = parse_explain_total_rows(explain)
                 stage_latencies_ms["explain_ms"] = int((perf_counter() - t_explain) * 1000)
             except SQLAlchemyError as exc:
+                trace.mark_failure("explain")
                 warnings.append(f"EXPLAIN failed: {exc}")
 
             final_guardrail = apply_guardrails(
@@ -783,6 +849,7 @@ class QueryService:
                     max_rows=max_rows,
                     connection_id=resolved_connection_id,
                     precomputed_explain=explain,
+                    trace=trace,
                 )
                 stage_latencies_ms["execute_ms"] = elapsed_ms
                 log_execution_event(
@@ -801,11 +868,13 @@ class QueryService:
                     },
                 )
             else:
+                trace.mark_failure("guardrail")
                 log_blocked_query(
                     question=question, sql=final_guardrail.sql, reasons=final_guardrail.reasons
                 )
                 warnings.append("Query execution skipped due to guardrails.")
         else:
+            trace.mark_failure("guardrail")
             log_blocked_query(question=question, sql=guarded_sql, reasons=initial_guardrail.reasons)
             warnings.append("Query execution skipped due to guardrails.")
 
@@ -826,6 +895,7 @@ class QueryService:
             reasoning=reasoning,
             linking_meta=linking_artifacts.context,
             constraint_meta=constraint_meta,
+            trace=trace,
         )
         response.execution_meta.stage_latencies_ms["total_pipeline_ms"] = int(
             (perf_counter() - started_at) * 1000
