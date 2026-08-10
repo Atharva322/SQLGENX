@@ -1,0 +1,31 @@
+{
+  "total_cases": 20,
+  "sql_exact_match": 0.0,
+  "execution_match": 0.0,
+  "accuracy_pct": 0.0,
+  "avg_latency_ms": 0.0,
+  "p50_latency_ms": 0.0,
+  "p95_latency_ms": 0.0,
+  "p99_latency_ms": 0.0,
+  "success_rate": 0.0,
+  "hallucination_detection_rate": 0.0,
+  "hallucination_false_positive": 0,
+  "hallucination_false_negative": 0,
+  "guardrail_effectiveness": 0.0,
+  "unsafe_block_rate": 0.0,
+  "false_block_rate": 0.0,
+  "hallucination_eval_cases": 0,
+  "guardrail_eval_cases": 0,
+  "schema_recall_at_5": 1.0,
+  "schema_ndcg_at_5": 0.925,
+  "retrieval_eval_cases": 20,
+  "output_buckets": {
+    "answered": 0,
+    "unanswerable": 0,
+    "blocked": 0,
+    "execution_error": 0
+  },
+  "retrieval_context_available": true,
+  "retrieval_only_mode": true,
+  "limited_cases": 20
+}
