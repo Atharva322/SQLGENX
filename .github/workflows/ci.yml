@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "perf/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  static-and-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt
+      - run: npm ci
+      - run: python -m compileall src tests evals benchmarks
+      - run: pytest -q -m "not integration and not live"
+      - run: npm test -- --run
+      - run: python benchmarks/validate_cases.py --connection benchmark
+      - run: python benchmarks/run_latency.py --profile deterministic-report-smoke --repetitions 1 --limit 5
+
+  postgres-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: text2sql_user
+          POSTGRES_PASSWORD: text2sql_pass
+          POSTGRES_DB: sample_company
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U text2sql_user"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://text2sql_user:text2sql_pass@localhost:5432/sample_company
+      LLM_PROVIDER: deterministic
+      LLM_MODEL: sqlgenx-fixture-v1
+      RAG_EMBEDDING_LOCAL_ONLY: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt
+      - run: psql "$DATABASE_URL" -f benchmarks/db/init.sql
+      - run: python benchmarks/validate_cases.py --connection benchmark
+      - run: pytest -q -m integration
+      - run: python benchmarks/run_latency.py --profile integration-service --repetitions 1 --limit 5
+
+  evaluation-smoke:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: text2sql_user
+          POSTGRES_PASSWORD: text2sql_pass
+          POSTGRES_DB: sample_company
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U text2sql_user"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://text2sql_user:text2sql_pass@localhost:5432/sample_company
+      LLM_PROVIDER: deterministic
+      LLM_MODEL: sqlgenx-fixture-v1
+      RAG_EMBEDDING_LOCAL_ONLY: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt
+      - run: psql "$DATABASE_URL" -f benchmarks/db/init.sql
+      - run: python evals/run_evals.py --limit 5
+      - run: python evals/run_evals.py --retrieval-only --limit 20

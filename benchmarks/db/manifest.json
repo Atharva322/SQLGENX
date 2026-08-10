@@ -1,0 +1,17 @@
+{
+  "name": "sqlgenx_phase_0_benchmark",
+  "version": "1",
+  "schema_fingerprint": "phase0-benchmark-v1",
+  "tables": {
+    "departments": ["id", "name", "cost_center"],
+    "employees": ["id", "department_id", "first_name", "last_name", "title", "hired_at", "salary"],
+    "customers": ["id", "name", "state", "city"],
+    "products": ["id", "name", "category", "price"],
+    "orders": ["id", "customer_id", "order_date", "status", "shipping_address", "total"],
+    "order_items": ["id", "order_id", "product_id", "quantity", "unit_price"],
+    "invoices": ["id", "customer_id", "order_id", "status", "total", "issued_at"],
+    "payments": ["id", "invoice_id", "amount", "paid_at", "method"],
+    "sales": ["id", "employee_id", "amount", "sale_date", "region", "channel"]
+  },
+  "required_buckets": ["simple_filter", "aggregation", "join", "ambiguous", "unanswerable", "unsafe", "repeated"]
+}

@@ -13,12 +13,30 @@ from src.services.rag_retriever import _tokenize, retrieve_context
 DEFAULT_SYNONYMS = {
     "table_synonyms": {
         "sales": ["revenue", "orders", "transactions"],
-        "employees": ["staff", "workers", "team"],
-        "customers": ["clients", "buyers"],
+        "departments": ["department", "departments", "team", "teams", "engineering", "sales team"],
+        "employees": ["employee", "employees", "staff", "workers", "sales reps", "representatives"],
+        "customers": ["clients", "buyers", "customer", "customers", "acme", "corp", "shipping"],
+        "products": ["product", "products", "items"],
+        "orders": ["order", "orders", "purchases", "bought", "shipping"],
+        "order_items": ["order items", "line items", "quantity sold", "bought"],
+        "invoices": ["invoice", "invoices", "bills"],
+        "payments": ["payment", "payments", "paid"],
     },
     "column_synonyms": {
         "amount": ["revenue", "sales_amount", "value", "total"],
         "region": ["territory", "area", "zone"],
+        "state": ["region", "province"],
+        "quantity": ["quantity", "qty", "sold"],
+        "price": ["price", "cost"],
+        "salary": ["salary", "payroll"],
+        "status": ["status", "paid"],
+        "order_date": ["order date", "orders from", "year"],
+        "sale_date": ["sale date", "month", "monthly"],
+        "hired_at": ["hired", "hire date"],
+        "name": ["name", "names"],
+        "first_name": ["first name", "names"],
+        "last_name": ["last name", "names"],
+        "shipping_address": ["shipping", "address", "addresses"],
         "created_at": ["date", "timestamp", "created_on"],
     },
 }
@@ -36,6 +54,23 @@ def _normalize_question(question: str) -> str:
     compact = re.sub(r"\b(last|past)\s+(\d+)\s+(days|months|years)\b", r"last_\2_\3", compact, flags=re.I)
     compact = re.sub(r"\b(this)\s+(quarter|month|year)\b", r"current_\2", compact, flags=re.I)
     return compact
+
+
+def _variants(token: str) -> set[str]:
+    variants = {token}
+    if token.endswith("ies") and len(token) > 3:
+        variants.add(f"{token[:-3]}y")
+    if token.endswith("s") and len(token) > 3:
+        variants.add(token[:-1])
+    return variants
+
+
+def _normalized_tokens(text: str) -> set[str]:
+    tokens = _tokenize(text)
+    expanded: set[str] = set()
+    for token in tokens:
+        expanded.update(_variants(token))
+    return expanded
 
 
 def _load_synonyms() -> dict[str, dict[str, list[str]]]:
@@ -78,7 +113,7 @@ def _build_schema_docs_with_synonyms(
 def _score_candidates(
     question: str, tables: list[dict[str, Any]], synonyms: dict[str, dict[str, list[str]]], top_k: int
 ) -> tuple[list[SchemaCandidate], list[str]]:
-    q_tokens = _tokenize(question)
+    q_tokens = _normalized_tokens(question)
     table_syn = synonyms.get("table_synonyms", {})
     col_syn = synonyms.get("column_synonyms", {})
     candidates: list[SchemaCandidate] = []
@@ -86,8 +121,10 @@ def _score_candidates(
 
     for table in tables:
         table_name = str(table.get("table", ""))
-        table_tokens = _tokenize(table_name)
-        table_synonyms = [s.lower() for s in table_syn.get(table_name, [])]
+        table_tokens = _normalized_tokens(table_name)
+        table_synonyms = set()
+        for synonym in table_syn.get(table_name, []):
+            table_synonyms.update(_normalized_tokens(synonym))
         t_overlap = len(q_tokens.intersection(table_tokens))
         syn_overlap = len(q_tokens.intersection(set(table_synonyms)))
         t_score = min(1.0, 0.5 * t_overlap + 0.3 * syn_overlap)
@@ -108,8 +145,10 @@ def _score_candidates(
         for col in table.get("columns", []):
             col_name = str(col.get("name", ""))
             fq = f"{table_name}.{col_name}"
-            col_tokens = _tokenize(col_name)
-            col_synonyms = [s.lower() for s in col_syn.get(col_name, [])]
+            col_tokens = _normalized_tokens(col_name)
+            col_synonyms = set()
+            for synonym in col_syn.get(col_name, []):
+                col_synonyms.update(_normalized_tokens(synonym))
             c_overlap = len(q_tokens.intersection(col_tokens))
             c_syn_overlap = len(q_tokens.intersection(set(col_synonyms)))
             c_score = min(1.0, 0.45 * c_overlap + 0.35 * c_syn_overlap)
@@ -132,7 +171,20 @@ def _score_candidates(
     return candidates[: max(1, top_k)], sorted(set(synonym_hits))
 
 
-def _resolve_candidates(candidates: list[SchemaCandidate]) -> tuple[ResolvedIdentifierSet, bool, list[str], float]:
+def _columns_for_tables(tables: list[dict[str, Any]], resolved_tables: set[str]) -> list[str]:
+    return sorted(
+        {
+            f"{table.get('table')}.{col.get('name')}"
+            for table in tables
+            for col in table.get("columns", [])
+            if table.get("table") in resolved_tables and col.get("name")
+        }
+    )
+
+
+def _resolve_candidates(
+    candidates: list[SchemaCandidate], schema_tables: list[dict[str, Any]]
+) -> tuple[ResolvedIdentifierSet, bool, list[str], float]:
     tables: list[str] = []
     columns: list[str] = []
     for candidate in candidates:
@@ -143,8 +195,8 @@ def _resolve_candidates(candidates: list[SchemaCandidate]) -> tuple[ResolvedIden
             columns.append(f"{candidate.canonical_table}.{candidate.canonical_column}")
 
     tables = sorted(set(tables))
-    columns = sorted(set(columns))
-    join_hints = sorted({col.split(".")[0] for col in columns if "." in col})
+    columns = sorted(set(columns).union(_columns_for_tables(schema_tables, set(tables))))
+    join_hints = tables
     top_scores = sorted([c.score for c in candidates], reverse=True)[:2]
     ambiguous = len(top_scores) >= 2 and abs(top_scores[0] - top_scores[1]) < 0.08
     ambiguity_reasons: list[str] = []
@@ -212,9 +264,9 @@ def run_schema_linking(
     if settings.schema_linking_enabled:
         _ = _build_schema_docs_with_synonyms(selected_schema, synonyms)
         candidates, synonym_hits = _score_candidates(
-            normalized, selected_schema, synonyms, top_k=max(1, settings.schema_link_top_k)
+            normalized, tables, synonyms, top_k=max(1, settings.schema_link_top_k)
         )
-        resolved, ambiguous, ambiguity_reasons, confidence = _resolve_candidates(candidates)
+        resolved, ambiguous, ambiguity_reasons, confidence = _resolve_candidates(candidates, tables)
     else:
         candidates = []
         synonym_hits = []
