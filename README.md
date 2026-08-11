@@ -1,9 +1,10 @@
 # Text-to-SQL Interface with Guardrails and Hallucination Detection
 
-Latest Eval Snapshot (run pending local dependency setup):
-- Execution Accuracy: `0.000` (pending)
-- Hallucination Detection Rate: `0.000` (pending)
-- Unsafe Queries Executed: `0` across `55` safety-focused eval cases
+Latest Phase 0 Closure Evidence:
+- Sanitized quality summary: `evals/baseline_summary.json`
+- Sanitized latency summary: `benchmarks/phase_0_real_baseline_summary.json`
+- Deterministic adapter smoke unsafe executions: `0`
+- Local full PostgreSQL integration matrix: blocked in the captured environment because Docker Desktop Linux engine was unavailable
 
 ## What Is Implemented
 
@@ -65,6 +66,7 @@ Services:
 - API: `http://localhost:8000`
 - Frontend: `http://localhost:8501`
 - Postgres: `localhost:5432`
+- Benchmark Postgres: `localhost:55432`
 
 ## Multi-Database Connection Selector
 
@@ -114,6 +116,12 @@ Fast retrieval-metric only run:
 python evals/run_evals.py --retrieval-only --limit 20
 ```
 
+Deterministic adapter smoke:
+
+```bash
+LLM_PROVIDER=deterministic LLM_MODEL=sqlgenx-fixture-v1 python evals/run_evals.py --limit 5
+```
+
 Metrics reported:
 - SQL exact match
 - execution result match
@@ -130,7 +138,11 @@ Metrics reported:
 ## Test Commands
 
 ```bash
+python -m compileall src tests evals benchmarks
 pytest -q
+npm test -- --run
+python benchmarks/validate_cases.py --connection benchmark
+python benchmarks/run_latency.py --profile deterministic-report-smoke --repetitions 1 --limit 5
 ```
 
 If `pytest` is not installed in your environment:
@@ -138,3 +150,16 @@ If `pytest` is not installed in your environment:
 ```bash
 pip install pytest pytest-asyncio
 ```
+
+## Phase 0 Benchmarks
+
+`deterministic-report-smoke` is only a report-format smoke test and must not be used as application latency.
+
+Application-level profiles:
+
+```bash
+python benchmarks/run_latency.py --profile integration-service --repetitions 1 --limit 5
+python benchmarks/run_latency.py --profile integration-http --concurrency 5 --repetitions 1 --limit 5
+```
+
+These profiles use the real `QueryService` or FastAPI path with the deterministic provider adapter. Full baseline runs require the seeded PostgreSQL benchmark database from `benchmarks/db/init.sql`.

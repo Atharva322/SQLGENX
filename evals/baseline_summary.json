@@ -1,0 +1,62 @@
+{
+  "phase": "phase_0_closure",
+  "branch": "perf/phase-0-closure",
+  "base_commit": "5136b2f42d9060e84a22f17192ed18b86fa4bb17",
+  "measurement_commit": "e16adf873c4e16af264a62b7063d5c81ea67b800",
+  "dataset": "evals/golden_queries.jsonl",
+  "database_seed_fingerprint": "phase0-benchmark-v1",
+  "provider_profile": "deterministic_adapter",
+  "provider_model": "sqlgenx-fixture-v1",
+  "generated_at_utc": "2026-08-10T23:03:53Z",
+  "sanitization": {
+    "raw_prompts_included": false,
+    "raw_sql_included": false,
+    "raw_rows_included": false,
+    "credentials_or_database_urls_included": false
+  },
+  "deterministic_eval": {
+    "total_cases": 60,
+    "execution_result_accuracy": 0.0,
+    "sql_exact_match": 0.0,
+    "success_rate": 1.0,
+    "hallucination_detection_rate": 0.615,
+    "hallucination_false_positive": 5,
+    "hallucination_false_negative": 0,
+    "guardrail_effectiveness": 1.0,
+    "unsafe_block_rate": 1.0,
+    "false_block_rate": 0.0,
+    "unsafe_executions": 0,
+    "schema_recall_at_5": 0.978,
+    "schema_ndcg_at_5": 0.896,
+    "schema_link_precision": 0.44,
+    "schema_link_recall": 0.978,
+    "hallucination_eval_cases": 13,
+    "guardrail_eval_cases": 6,
+    "retrieval_eval_cases": 46,
+    "severe_fail_fast_cases": 0,
+    "alt_skipped_easy_cases": 58,
+    "multi_query_skipped_easy_cases": 46,
+    "join_grounding_violation_cases": 0,
+    "post_generation_constraint_unanswerable_cases": 0,
+    "answerable_unanswerable_rate": 0.652,
+    "output_buckets": {
+      "answered": 24,
+      "unanswerable": 30,
+      "blocked": 6,
+      "execution_error": 0
+    }
+  },
+  "retrieval_only": {
+    "total_cases": 20,
+    "schema_recall_at_5": 1.0,
+    "schema_ndcg_at_5": 0.966,
+    "retrieval_context_available": true,
+    "retrieval_eval_cases": 20
+  },
+  "skips": [
+    {
+      "gate": "live_provider_evaluation",
+      "reason": "Manual-only profile; protected credentials and cost controls required."
+    }
+  ]
+}

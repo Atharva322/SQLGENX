@@ -35,6 +35,20 @@ class ExecutionMeta(BaseModel):
     trace_coverage_ratio: float = 0.0
     llm_call_count: int = 0
     db_round_trip_count: int = 0
+    provider_attempt_count: int = 0
+    provider_success_count: int = 0
+    provider_failure_count: int = 0
+    provider_timeout_count: int = 0
+    provider_latency_ms: int = 0
+    llm_operations: list[dict[str, Any]] = Field(default_factory=list)
+    db_operation_count: int = 0
+    sql_statement_count: int = 0
+    schema_introspection_count: int = 0
+    explain_count: int = 0
+    query_execution_count: int = 0
+    alternative_execution_count: int = 0
+    db_error_count: int = 0
+    sql_statement_latency_ms: int = 0
     cache_state: dict[str, Any] = Field(default_factory=dict)
     validation_level: str = "standard"
     timeout_stage: str | None = None

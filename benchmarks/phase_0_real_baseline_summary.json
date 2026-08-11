@@ -1,0 +1,83 @@
+{
+  "phase": "phase_0_closure",
+  "branch": "perf/phase-0-closure",
+  "base_commit": "5136b2f42d9060e84a22f17192ed18b86fa4bb17",
+  "measurement_commit": "e16adf873c4e16af264a62b7063d5c81ea67b800",
+  "database_seed_fingerprint": "phase0-benchmark-v1",
+  "provider_profile": "deterministic_adapter",
+  "provider_model": "sqlgenx-fixture-v1",
+  "generated_at_utc": "2026-08-10T23:03:53Z",
+  "sanitization": {
+    "raw_prompts_included": false,
+    "raw_sql_included": false,
+    "raw_rows_included": false,
+    "credentials_or_database_urls_included": false
+  },
+  "source_result_files": [
+    "benchmarks/results/integration-service_20260810T223237Z.json",
+    "benchmarks/results/integration-http-inprocess_20260810T225207Z.json",
+    "benchmarks/results/integration-http-inprocess_20260810T230153Z.json"
+  ],
+  "integration_service": {
+    "sample_count": 1500,
+    "state": "warm",
+    "concurrency": 1,
+    "repetitions": 30,
+    "p50_ms": 677.637,
+    "p95_ms": 994.102,
+    "p99_ms": 1170.779,
+    "requests_per_second": 1.4,
+    "success_rate": 1.0,
+    "minimum_trace_coverage": 1.0,
+    "error_rate": 0.0,
+    "unsafe_queries_executed": 0,
+    "provider_attempts": 5280,
+    "llm_calls": 5280,
+    "tokens": 181200,
+    "sql_statements": 164040,
+    "query_execution_count": 1830
+  },
+  "integration_http_inprocess_concurrency_1": {
+    "sample_count": 1500,
+    "state": "warm",
+    "concurrency": 1,
+    "repetitions": 30,
+    "p50_ms": 728.711,
+    "p95_ms": 1050.286,
+    "p99_ms": 1211.424,
+    "requests_per_second": 1.323,
+    "success_rate": 1.0,
+    "minimum_trace_coverage": 1.0,
+    "error_rate": 0.0,
+    "unsafe_queries_executed": 0,
+    "provider_attempts": 5280,
+    "llm_calls": 5280,
+    "tokens": 181200,
+    "sql_statements": 164040,
+    "query_execution_count": 1830
+  },
+  "integration_http_inprocess_concurrency_5": {
+    "sample_count": 1500,
+    "state": "warm",
+    "concurrency": 5,
+    "repetitions": 30,
+    "p50_ms": 1760.632,
+    "p95_ms": 2636.996,
+    "p99_ms": 3217.408,
+    "requests_per_second": 0.549,
+    "success_rate": 1.0,
+    "minimum_trace_coverage": 1.0,
+    "error_rate": 0.0,
+    "unsafe_queries_executed": 0,
+    "provider_attempts": 4880,
+    "llm_calls": 4880,
+    "tokens": 194160,
+    "sql_statements": 164040,
+    "query_execution_count": 1830
+  },
+  "limitations": [
+    "The full matrix uses the deterministic provider adapter and measures real QueryService/FastAPI/PostgreSQL paths, not paid live-provider latency.",
+    "Live-provider latency was not collected because protected credentials and cost controls are required.",
+    "Do not use deterministic-report-smoke timing as application latency."
+  ]
+}

@@ -33,3 +33,7 @@ Thumbs.db
 
 # Node leftovers (if any)
 node_modules/
+
+evals/latest_eval_snapshot.json
+
+evals/latest_eval_snapshot.json

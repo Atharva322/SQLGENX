@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
 
 from src.config.settings import get_settings
+from src.observability.db_observer import attach_engine_observer
 
 
 _settings = get_settings()
@@ -49,6 +50,7 @@ def get_engine(connection_id: str | None = None) -> Engine:
         return _engine_cache[cid]
     resolved_url = resolve_database_url(cid)
     engine = create_engine(resolved_url, **_build_engine_kwargs(resolved_url))
+    attach_engine_observer(engine)
     _engine_cache[cid] = engine
     return engine
 

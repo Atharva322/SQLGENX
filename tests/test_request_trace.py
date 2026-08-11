@@ -6,23 +6,47 @@ from src.observability.request_trace import RequestTrace, redact_secrets
 def test_timer_records_duration_on_success() -> None:
     trace = RequestTrace(request_id="qry_test")
 
-    with trace.timer("prompt_build_ms"):
+    with trace.timer("prompt_format_ms"):
         pass
 
-    assert "prompt_build_ms" in trace.stage_durations_ms
-    assert trace.stage_durations_ms["prompt_build_ms"] >= 0
-    assert trace.total_duration_ms() >= trace.stage_durations_ms["prompt_build_ms"]
+    assert "prompt_format_ms" in trace.stage_durations_ms
+    assert trace.stage_durations_ms["prompt_format_ms"] >= 0
+    assert trace.total_duration_ms() >= trace.stage_durations_ms["prompt_format_ms"]
 
 
 def test_timer_records_duration_and_failure_stage_on_exception() -> None:
     trace = RequestTrace(request_id="qry_test")
 
     with pytest.raises(RuntimeError):
-        with trace.timer("llm_generation_ms"):
+        with trace.timer("primary_sql_generation_ms"):
             raise RuntimeError("provider timeout")
 
-    assert trace.stage_durations_ms["llm_generation_ms"] >= 0
-    assert trace.failure_stage == "llm_generation_ms"
+    assert trace.stage_durations_ms["primary_sql_generation_ms"] >= 0
+    assert trace.failure_stage == "primary_sql_generation_ms"
+
+
+def test_nested_stage_policy_rejects_double_counting() -> None:
+    trace = RequestTrace(request_id="qry_test")
+
+    with pytest.raises(RuntimeError):
+        with trace.timer("schema_introspection_ms"):
+            with trace.timer("feedback_load_ms"):
+                pass
+
+
+def test_finalization_is_idempotent_and_adds_framework_overhead() -> None:
+    trace = RequestTrace(request_id="qry_test")
+    with trace.timer("schema_introspection_ms"):
+        pass
+
+    trace.finish()
+    first = trace.snapshot()
+    trace.finish()
+    second = trace.snapshot()
+
+    assert first.total_duration_ms == second.total_duration_ms
+    assert "framework_overhead_ms" in first.stage_durations_ms
+    assert first.trace_coverage_ratio >= 0.95
 
 
 def test_counters_cannot_become_negative() -> None:

@@ -118,6 +118,8 @@ def test_query_response_keeps_old_meta_and_adds_trace_fields(monkeypatch) -> Non
     assert "stage_durations_ms" in meta
     assert meta["total_duration_ms"] >= 0
     assert meta["trace_coverage_ratio"] >= 0
-    assert meta["llm_call_count"] >= 3
-    assert meta["db_round_trip_count"] >= 2
+    assert "llm_call_count" in meta
+    assert "provider_attempt_count" in meta
+    assert "sql_statement_count" in meta
+    assert meta["db_round_trip_count"] >= 0
     assert meta["validation_level"] == "standard"

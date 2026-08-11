@@ -19,6 +19,24 @@ services:
       timeout: 5s
       retries: 5
 
+  benchmark-postgres:
+    image: postgres:16-alpine
+    container_name: sqlgenx-benchmark-db
+    environment:
+      POSTGRES_USER: text2sql_user
+      POSTGRES_PASSWORD: text2sql_pass
+      POSTGRES_DB: sample_company
+    ports:
+      - "55432:5432"
+    volumes:
+      - benchmark_postgres_data:/var/lib/postgresql/data
+      - ./benchmarks/db:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U text2sql_user"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   api:
     build:
       context: .
@@ -56,3 +74,4 @@ services:
 
 volumes:
   postgres_data:
+  benchmark_postgres_data:
