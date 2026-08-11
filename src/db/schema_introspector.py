@@ -4,7 +4,12 @@ import json
 from sqlalchemy import inspect
 from sqlalchemy.exc import SQLAlchemyError
 
+from src.cache.ttl import TTLCache
+from src.config.settings import get_settings
 from src.db.engine import get_engine
+
+
+_SCHEMA_CACHE = TTLCache[str, dict](max_size=32, ttl_seconds=300)
 
 
 def compute_schema_fingerprint(schema_summary: dict) -> str:
@@ -28,8 +33,17 @@ def compute_schema_fingerprint(schema_summary: dict) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def get_schema_summary(connection_id: str | None = None) -> dict:
-    """Introspect DB schema for prompt construction."""
+def clear_schema_summary_cache() -> None:
+    _SCHEMA_CACHE.clear()
+
+
+def refresh_schema_summary(connection_id: str | None = None) -> dict:
+    summary = _introspect_schema(connection_id=connection_id)
+    _SCHEMA_CACHE.set(connection_id or "default", summary)
+    return summary
+
+
+def _introspect_schema(connection_id: str | None = None) -> dict:
     try:
         inspector = inspect(get_engine(connection_id))
         tables = []
@@ -55,3 +69,28 @@ def get_schema_summary(connection_id: str | None = None) -> dict:
         return summary
     except SQLAlchemyError as exc:
         return {"tables": [], "error": f"Schema introspection failed: {exc}"}
+
+
+def get_schema_summary(connection_id: str | None = None) -> dict:
+    """Introspect DB schema for prompt construction, with bounded TTL caching."""
+    settings = get_settings()
+    key = connection_id or "default"
+    if getattr(settings, "phase1_cache_enabled", True):
+        global _SCHEMA_CACHE
+        max_entries = int(getattr(settings, "schema_cache_max_entries", 32))
+        ttl_seconds = int(getattr(settings, "schema_cache_ttl_seconds", 300))
+        if (
+            _SCHEMA_CACHE.max_size != max_entries
+            or _SCHEMA_CACHE.ttl_seconds != ttl_seconds
+        ):
+            _SCHEMA_CACHE = TTLCache(
+                max_size=max_entries,
+                ttl_seconds=ttl_seconds,
+            )
+        cached = _SCHEMA_CACHE.get(key)
+        if cached is not None:
+            return cached
+    summary = _introspect_schema(connection_id=connection_id)
+    if getattr(settings, "phase1_cache_enabled", True):
+        _SCHEMA_CACHE.set(key, summary)
+    return summary

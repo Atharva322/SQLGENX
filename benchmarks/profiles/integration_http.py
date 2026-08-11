@@ -37,6 +37,7 @@ def _request(client: TestClient, case: dict[str, Any]) -> dict[str, Any]:
                 "llm_calls": int(meta.get("llm_call_count", 0) or 0),
                 "provider_attempts": int(meta.get("provider_attempt_count", 0) or 0),
                 "sql_statements": int(meta.get("sql_statement_count", 0) or 0),
+                "schema_introspection_count": int(meta.get("schema_introspection_count", 0) or 0),
                 "query_execution_count": int(meta.get("query_execution_count", 0) or 0),
                 "trace_coverage_ratio": float(meta.get("trace_coverage_ratio", 0.0) or 0.0),
             }

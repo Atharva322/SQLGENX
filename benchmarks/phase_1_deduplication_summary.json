@@ -1,0 +1,92 @@
+{
+  "phase": "phase_1_deduplicate_request_path",
+  "branch": "perf/phase-1-deduplicate",
+  "base_phase": "phase_0_closure",
+  "measurement_commit": "341ba3f",
+  "database_seed_fingerprint": "phase0-benchmark-v1",
+  "provider_profile": "deterministic_adapter",
+  "provider_model": "sqlgenx-fixture-v1",
+  "generated_at_local": "2026-08-11T14:38:38-07:00",
+  "sanitization": {
+    "raw_prompts_included": false,
+    "raw_sql_included": false,
+    "raw_rows_included": false,
+    "credentials_or_database_urls_included": false
+  },
+  "source_result_files": {
+    "phase1_integration_service": "benchmarks/results/integration-service_20260811T213258Z.json",
+    "phase1_integration_http_c1": "benchmarks/results/integration-http-inprocess_20260811T213618Z.json",
+    "phase1_integration_http_c5": "benchmarks/results/integration-http-inprocess_20260811T213745Z.json",
+    "phase0_summary": "benchmarks/phase_0_real_baseline_summary.json"
+  },
+  "comparison": [
+    {
+      "profile": "integration_service",
+      "sample_count": 1500,
+      "phase0_p50_ms": 677.637,
+      "phase1_p50_ms": 103.069,
+      "p50_reduction_pct": 84.79,
+      "phase0_p95_ms": 994.102,
+      "phase1_p95_ms": 178.175,
+      "p95_reduction_pct": 82.08,
+      "phase0_tokens": 181200,
+      "phase1_tokens": 181200,
+      "token_reduction_pct": 0.0,
+      "phase1_schema_introspection_count": 0,
+      "success_rate": 1.0,
+      "unsafe_queries_executed": 0,
+      "error_rate": 0.0
+    },
+    {
+      "profile": "integration_http_inprocess_concurrency_1",
+      "sample_count": 1500,
+      "phase0_p50_ms": 728.711,
+      "phase1_p50_ms": 116.531,
+      "p50_reduction_pct": 84.01,
+      "phase0_p95_ms": 1050.286,
+      "phase1_p95_ms": 209.307,
+      "p95_reduction_pct": 80.07,
+      "phase0_tokens": 181200,
+      "phase1_tokens": 181200,
+      "token_reduction_pct": 0.0,
+      "phase1_schema_introspection_count": 0,
+      "success_rate": 1.0,
+      "unsafe_queries_executed": 0,
+      "error_rate": 0.0
+    },
+    {
+      "profile": "integration_http_inprocess_concurrency_5",
+      "sample_count": 1500,
+      "phase0_p50_ms": 1760.632,
+      "phase1_p50_ms": 171.386,
+      "p50_reduction_pct": 90.27,
+      "phase0_p95_ms": 2636.996,
+      "phase1_p95_ms": 294.43,
+      "p95_reduction_pct": 88.83,
+      "phase0_tokens": 194160,
+      "phase1_tokens": 176100,
+      "token_reduction_pct": 9.3,
+      "phase1_schema_introspection_count": 0,
+      "success_rate": 1.0,
+      "unsafe_queries_executed": 0,
+      "error_rate": 0.0
+    }
+  ],
+  "quality_non_regression": {
+    "full_eval_total_cases": 60,
+    "full_eval_success_rate": 1.0,
+    "hallucination_detection_rate": 0.615,
+    "guardrail_effectiveness": 1.0,
+    "unsafe_block_rate": 1.0,
+    "execution_error_count": 0,
+    "retrieval_only_cases": 20,
+    "retrieval_only_schema_recall_at_5": 1.0,
+    "retrieval_only_schema_ndcg_at_5": 0.966
+  },
+  "acceptance_notes": [
+    "Warm schema introspections are zero in all Phase 1 full-matrix profiles.",
+    "Warm p50 latency reduction exceeds the 25% target in all measured profiles.",
+    "Deterministic provider token accounting is fixed per generated operation, so service and HTTP concurrency-1 token totals do not reflect prompt-cache savings; HTTP concurrency-5 shows a 9.3% token reduction from fewer observed generated operations under concurrent scheduling.",
+    "No guardrail threshold or validation policy was weakened."
+  ]
+}

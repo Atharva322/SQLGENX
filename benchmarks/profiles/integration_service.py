@@ -26,6 +26,7 @@ def _sample_from_response(case: dict[str, Any], latency_ms: float, response: Any
         "llm_calls": meta.llm_call_count,
         "provider_attempts": meta.provider_attempt_count,
         "sql_statements": meta.sql_statement_count,
+        "schema_introspection_count": meta.schema_introspection_count,
         "query_execution_count": meta.query_execution_count,
         "unsafe_queries_executed": unsafe_executed,
         "trace_coverage_ratio": meta.trace_coverage_ratio,

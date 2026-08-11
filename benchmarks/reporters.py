@@ -116,6 +116,9 @@ def summarize_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
             "provider_attempts": sum(int(row.get("provider_attempts", 0) or 0) for row in rows),
             "tokens": sum(int(row.get("tokens", 0) or 0) for row in rows),
             "sql_statements": sum(int(row.get("sql_statements", 0) or 0) for row in rows),
+            "schema_introspections": sum(
+                int(row.get("schema_introspection_count", 0) or 0) for row in rows
+            ),
             "unsafe_queries_executed": sum(
                 int(row.get("unsafe_queries_executed", 0) or 0) for row in rows
             ),
@@ -145,6 +148,9 @@ def summarize_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
         else 0.0,
         "unsafe_queries_executed": sum(
             int(row.get("unsafe_queries_executed", 0) or 0) for row in samples
+        ),
+        "schema_introspection_count": sum(
+            int(row.get("schema_introspection_count", 0) or 0) for row in samples
         ),
         "minimum_trace_coverage": round(min(trace_values), 3) if trace_values else 0.0,
         "behavior_success_rate": behavior_success_rate,

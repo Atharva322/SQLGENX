@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     intermediate_trace_logging_enabled: bool = Field(
         default=True, alias="INTERMEDIATE_TRACE_LOGGING_ENABLED"
     )
+    phase1_cache_enabled: bool = Field(default=True, alias="PHASE1_CACHE_ENABLED")
+    schema_cache_ttl_seconds: int = Field(default=300, alias="SCHEMA_CACHE_TTL_SECONDS")
+    schema_cache_max_entries: int = Field(default=32, alias="SCHEMA_CACHE_MAX_ENTRIES")
+    prompt_asset_cache_enabled: bool = Field(default=True, alias="PROMPT_ASSET_CACHE_ENABLED")
+    prompt_asset_cache_max_entries: int = Field(default=32, alias="PROMPT_ASSET_CACHE_MAX_ENTRIES")
 
     api_host: str = Field(default="0.0.0.0", alias="API_HOST")
     api_port: int = Field(default=8000, alias="API_PORT")

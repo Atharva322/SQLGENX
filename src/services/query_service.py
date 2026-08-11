@@ -34,6 +34,7 @@ from src.models.schemas import (
 from src.observability.request_trace import RequestTrace
 from src.observability.db_observer import reset_current_trace, set_current_trace
 from src.services.prompt_builder import build_prompt, build_query_plan_draft, select_relevant_feedback_examples
+from src.services.query_context import QueryContext, normalize_sql
 from src.services.schema_linker import run_schema_linking
 from src.utils.audit import log_blocked_query, log_execution_event
 from src.utils.intermediate_traces import log_intermediate_trace
@@ -97,6 +98,7 @@ class QueryService:
         prompt: str,
         candidates: list[tuple[str, GeneratedSQL]],
         max_rows: int,
+        request_context: QueryContext | None = None,
         trace: RequestTrace | None = None,
     ) -> tuple[str, GeneratedSQL, list[dict[str, Any]], list[str]]:
         scored: list[dict[str, Any]] = []
@@ -110,10 +112,16 @@ class QueryService:
                 explain_row_limit=self.settings.max_explain_rows,
             )
             with (trace.timer("candidate_validation_ms") if trace else nullcontext()):
-                back_q = self.llm.back_translate_sql(
-                    sql=pre_guardrail.sql if pre_guardrail.allowed else candidate.sql,
-                    prompt_context=prompt,
-                )
+                sql_for_translation = pre_guardrail.sql if pre_guardrail.allowed else candidate.sql
+                if request_context:
+                    back_q = request_context.back_translate(
+                        self.llm, sql_for_translation, prompt_context=prompt
+                    )
+                else:
+                    back_q = self.llm.back_translate_sql(
+                        sql=sql_for_translation,
+                        prompt_context=prompt,
+                    )
             alignment = verify_sql_alignment(
                 original_question=question, back_translated_question=back_q
             )
@@ -206,8 +214,9 @@ class QueryService:
         accessed_tables: list[str],
         accessed_columns: list[str],
         connection_id: str,
+        schema: dict | None = None,
     ) -> float:
-        schema = get_schema_summary(connection_id=connection_id)
+        schema = schema or get_schema_summary(connection_id=connection_id)
         question_tokens = {token.lower() for token in question.split() if len(token) > 2}
         expected: set[str] = set()
         for table in schema.get("tables", []):
@@ -286,17 +295,27 @@ class QueryService:
         reasoning: ReasoningMeta | None = None,
         linking_meta: LinkingContext | None = None,
         constraint_meta: ConstraintValidationResult | None = None,
+        request_context: QueryContext | None = None,
+        prompt_context: str | None = None,
+        agreement_candidate: GeneratedSQL | None = None,
         trace: RequestTrace | None = None,
     ) -> QueryResponse:
+        prompt = prompt_context or (request_context.prompt_for_validation() if request_context else "")
         with (trace.timer("alignment_validation_ms") if trace else nullcontext()):
-            prompt = build_prompt(
-                question,
-                connection_id=connection_id,
-                linking_context=linking_meta,
-            )
-            back_translated_question = self.llm.back_translate_sql(
-                sql=guarded_sql, prompt_context=prompt
-            )
+            if request_context:
+                back_translated_question = request_context.back_translate(
+                    self.llm, guarded_sql, prompt_context=prompt
+                )
+            else:
+                if not prompt:
+                    prompt = build_prompt(
+                        question,
+                        connection_id=connection_id,
+                        linking_context=linking_meta,
+                    )
+                back_translated_question = self.llm.back_translate_sql(
+                    sql=guarded_sql, prompt_context=prompt
+                )
             alignment = verify_sql_alignment(
                 original_question=question,
                 back_translated_question=back_translated_question,
@@ -334,9 +353,11 @@ class QueryService:
         )
         if should_multi_query:
             with (trace.timer("agreement_validation_ms") if trace else nullcontext()):
-                alt_generated = self.llm.generate_alternative_sql(
-                    question=question, prompt_context=prompt, primary_sql=guarded_sql
-                )
+                alt_generated = agreement_candidate
+                if alt_generated is None or normalize_sql(alt_generated.sql) == normalize_sql(guarded_sql):
+                    alt_generated = self.llm.generate_alternative_sql(
+                        question=question, prompt_context=prompt, primary_sql=guarded_sql
+                    )
             alt_guardrail = apply_guardrails(
                 sql=alt_generated.sql,
                 max_rows=self.settings.max_result_rows,
@@ -368,6 +389,7 @@ class QueryService:
                 accessed_tables=generated.accessed_tables,
                 accessed_columns=generated.accessed_columns,
                 connection_id=connection_id,
+                schema=request_context.schema if request_context else None,
             )
 
         signals = ConfidenceSignals(
@@ -489,6 +511,13 @@ class QueryService:
         with trace.timer("schema_introspection_ms"):
             schema = get_schema_summary(connection_id=resolved_connection_id)
         schema_fingerprint = schema.get("schema_fingerprint") or compute_schema_fingerprint(schema)
+        request_context = QueryContext(
+            question=question,
+            connection_id=resolved_connection_id,
+            schema=schema,
+            schema_fingerprint=schema_fingerprint,
+            trace=trace,
+        )
         with trace.timer("feedback_load_ms"):
             scoped_feedback = select_relevant_feedback_examples(
                 question,
@@ -518,11 +547,14 @@ class QueryService:
             prompt = build_prompt(
                 question,
                 connection_id=resolved_connection_id,
+                schema=request_context.schema,
+                scoped_feedback=scoped_feedback,
                 linking_context=linking_artifacts.context,
                 selected_tables_override=linking_artifacts.selected_schema_tables,
                 selected_examples_override=linking_artifacts.selected_examples,
                 include_query_plan_draft=False,
             )
+            request_context.prompt = prompt
 
         reasoning = ReasoningMeta()
         llm_usages: list[dict[str, Any]] = []
@@ -612,11 +644,15 @@ class QueryService:
                 final_prompt = build_prompt(
                     question,
                     connection_id=resolved_connection_id,
+                    schema=request_context.schema,
+                    scoped_feedback=scoped_feedback,
                     linking_context=linking_artifacts.context,
                     selected_tables_override=linking_artifacts.selected_schema_tables,
                     selected_examples_override=linking_artifacts.selected_examples,
                     query_plan_override=validated_plan,
                 )
+                request_context.final_prompt = final_prompt
+                request_context.query_plan = validated_plan
             with trace.timer("primary_sql_generation_ms"):
                 primary = self.llm.generate_structured_sql(
                     question=question, prompt_context=final_prompt
@@ -646,6 +682,7 @@ class QueryService:
                         prompt=final_prompt,
                         candidates=[("primary", primary), ("alternative", alternative)],
                         max_rows=max_rows,
+                        request_context=request_context,
                         trace=trace,
                     )
                 )
@@ -656,6 +693,9 @@ class QueryService:
                     validator_notes=validator_notes,
                     query_plan=validated_plan.model_dump(),
                 )
+                agreement_candidate = alternative if selected_name == "primary" else primary
+        if "agreement_candidate" not in locals():
+            agreement_candidate = None
         constraint_meta = ConstraintValidationResult(passed=True)
 
         with trace.timer("intent_guardrail_ms"):
@@ -683,6 +723,8 @@ class QueryService:
                 reasoning=reasoning,
                 linking_meta=linking_artifacts.context,
                 constraint_meta=constraint_meta,
+                request_context=request_context,
+                prompt_context=request_context.prompt_for_validation(),
                 trace=trace,
             )
             with trace.timer("history_audit_ms"):
@@ -739,6 +781,8 @@ class QueryService:
                 reasoning=reasoning,
                 linking_meta=linking_artifacts.context,
                 constraint_meta=constraint_meta,
+                request_context=request_context,
+                prompt_context=request_context.prompt_for_validation(),
                 trace=trace,
             )
             with trace.timer("history_audit_ms"):
@@ -813,6 +857,8 @@ class QueryService:
                         reasoning=reasoning,
                         linking_meta=linking_artifacts.context,
                         constraint_meta=constraint_meta,
+                        request_context=request_context,
+                        prompt_context=request_context.prompt_for_validation(),
                         trace=trace,
                     )
                     with trace.timer("history_audit_ms"):
@@ -929,6 +975,9 @@ class QueryService:
             reasoning=reasoning,
             linking_meta=linking_artifacts.context,
             constraint_meta=constraint_meta,
+            request_context=request_context,
+            prompt_context=request_context.prompt_for_validation(),
+            agreement_candidate=agreement_candidate,
             trace=trace,
         )
         with trace.timer("history_audit_ms"):

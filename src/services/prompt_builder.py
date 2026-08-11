@@ -2,6 +2,7 @@ from pathlib import Path
 import json
 import re
 
+from src.cache.ttl import TTLCache
 from src.config.settings import get_settings
 from src.db.schema_introspector import compute_schema_fingerprint, get_schema_summary
 from src.models.schemas import LinkingContext, QueryPlanDraft
@@ -10,6 +11,8 @@ from src.services.rag_retriever import retrieve_context
 
 FEEDBACK_FEWSHOTS_PATH = Path("data") / "feedback_fewshots.jsonl"
 PROMPT_ASSETS_PATH = Path("data") / "prompt_assets.json"
+_PROMPT_ASSET_CACHE = TTLCache[tuple[str, int, int], list[dict]](max_size=32, ttl_seconds=3600)
+_FEEDBACK_CACHE = TTLCache[tuple[str, int, int], list[dict]](max_size=32, ttl_seconds=3600)
 STOPWORDS = {
     "the",
     "a",
@@ -38,9 +41,32 @@ def _tokenize(text: str) -> set[str]:
     }
 
 
+def _prompt_caches_enabled(settings: object) -> bool:
+    return getattr(settings, "phase1_cache_enabled", True) and getattr(
+        settings, "prompt_asset_cache_enabled", True
+    )
+
+
+def _resize_prompt_caches(settings: object) -> None:
+    global _PROMPT_ASSET_CACHE, _FEEDBACK_CACHE
+    max_entries = int(getattr(settings, "prompt_asset_cache_max_entries", 32))
+    if _PROMPT_ASSET_CACHE.max_size != max_entries:
+        _PROMPT_ASSET_CACHE = TTLCache(max_size=max_entries, ttl_seconds=3600)
+    if _FEEDBACK_CACHE.max_size != max_entries:
+        _FEEDBACK_CACHE = TTLCache(max_size=max_entries, ttl_seconds=3600)
+
+
 def _load_feedback_examples() -> list[dict]:
     if not FEEDBACK_FEWSHOTS_PATH.exists():
         return []
+    settings = get_settings()
+    _resize_prompt_caches(settings)
+    stat = FEEDBACK_FEWSHOTS_PATH.stat()
+    cache_key = (str(FEEDBACK_FEWSHOTS_PATH), int(stat.st_mtime_ns), int(stat.st_size))
+    if _prompt_caches_enabled(settings):
+        cached = _FEEDBACK_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
     examples: list[dict] = []
     with FEEDBACK_FEWSHOTS_PATH.open("r", encoding="utf-8") as handle:
         for line in handle:
@@ -67,12 +93,22 @@ def _load_feedback_examples() -> list[dict]:
                     "schema_fingerprint": payload.get("schema_fingerprint"),
                 }
             )
+    if _prompt_caches_enabled(settings):
+        _FEEDBACK_CACHE.set(cache_key, examples)
     return examples
 
 
 def _load_prompt_assets_examples() -> list[dict]:
     if not PROMPT_ASSETS_PATH.exists():
         return []
+    settings = get_settings()
+    _resize_prompt_caches(settings)
+    stat = PROMPT_ASSETS_PATH.stat()
+    cache_key = (str(PROMPT_ASSETS_PATH), int(stat.st_mtime_ns), int(stat.st_size))
+    if _prompt_caches_enabled(settings):
+        cached = _PROMPT_ASSET_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
     try:
         payload = json.loads(PROMPT_ASSETS_PATH.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
@@ -93,7 +129,14 @@ def _load_prompt_assets_examples() -> list[dict]:
                     "source": "prompt_assets",
                 }
             )
+    if _prompt_caches_enabled(settings):
+        _PROMPT_ASSET_CACHE.set(cache_key, normalized)
     return normalized
+
+
+def clear_prompt_asset_caches() -> None:
+    _PROMPT_ASSET_CACHE.clear()
+    _FEEDBACK_CACHE.clear()
 
 
 def select_relevant_feedback_examples(
@@ -205,6 +248,8 @@ def build_query_plan_draft(
 def build_prompt(
     question: str,
     connection_id: str | None = None,
+    schema: dict | None = None,
+    scoped_feedback: list[dict] | None = None,
     linking_context: LinkingContext | None = None,
     selected_tables_override: list[dict] | None = None,
     selected_examples_override: list[dict] | None = None,
@@ -212,20 +257,21 @@ def build_prompt(
     include_query_plan_draft: bool = True,
 ) -> str:
     settings = get_settings()
-    schema = get_schema_summary(connection_id=connection_id)
+    schema = schema or get_schema_summary(connection_id=connection_id)
     all_tables = schema.get("tables", [])
     schema_lines: list[str] = []
     schema_fingerprint = schema.get("schema_fingerprint")
     if not schema_fingerprint:
         schema_fingerprint = compute_schema_fingerprint(schema)
 
-    scoped_feedback = select_relevant_feedback_examples(
-        question,
-        connection_id=connection_id,
-        schema_fingerprint=schema_fingerprint,
-        max_examples=max(5, settings.rag_top_k_examples),
-        min_confidence=settings.rag_min_feedback_confidence,
-    )
+    if scoped_feedback is None:
+        scoped_feedback = select_relevant_feedback_examples(
+            question,
+            connection_id=connection_id,
+            schema_fingerprint=schema_fingerprint,
+            max_examples=max(5, settings.rag_top_k_examples),
+            min_confidence=settings.rag_min_feedback_confidence,
+        )
 
     retrieval_meta: dict[str, str | int | float] = {
         "mode": "disabled",
