@@ -285,6 +285,8 @@ class LLMClient:
     def __init__(self) -> None:
         self.settings = get_settings()
         self.observer: LLMCallObserver | None = None
+        self._openai_client: OpenAI | None = None
+        self._anthropic_client: Anthropic | None = None
 
     def _system_prompt(self) -> str:
         return (
@@ -318,7 +320,7 @@ class LLMClient:
         model = self.settings.llm_model or "gpt-4o-mini"
         if self.observer:
             self.observer.on_attempt(operation, "openai", model)
-        client = OpenAI(api_key=self.settings.openai_api_key)
+        client = self._get_openai_client()
         try:
             response = client.chat.completions.create(
                 model=model,
@@ -356,7 +358,7 @@ class LLMClient:
         model = self.settings.llm_model or "claude-3-5-sonnet-latest"
         if self.observer:
             self.observer.on_attempt(operation, "anthropic", model)
-        client = Anthropic(api_key=self.settings.anthropic_api_key)
+        client = self._get_anthropic_client()
         try:
             message = client.messages.create(
                 model=model,
@@ -395,7 +397,7 @@ class LLMClient:
         model = self.settings.llm_model or "gpt-4o-mini"
         if self.observer:
             self.observer.on_attempt(operation, "openai", model)
-        client = OpenAI(api_key=self.settings.openai_api_key)
+        client = self._get_openai_client()
         try:
             response = client.chat.completions.create(
                 model=model,
@@ -431,7 +433,7 @@ class LLMClient:
         model = self.settings.llm_model or "claude-3-5-sonnet-latest"
         if self.observer:
             self.observer.on_attempt(operation, "anthropic", model)
-        client = Anthropic(api_key=self.settings.anthropic_api_key)
+        client = self._get_anthropic_client()
         try:
             message = client.messages.create(
                 model=model,
@@ -487,6 +489,16 @@ class LLMClient:
 
     def _is_deterministic_enabled(self) -> bool:
         return self._provider() in {"deterministic", "fake", "fixture"}
+
+    def _get_openai_client(self) -> OpenAI:
+        if self._openai_client is None:
+            self._openai_client = OpenAI(api_key=self.settings.openai_api_key)
+        return self._openai_client
+
+    def _get_anthropic_client(self) -> Anthropic:
+        if self._anthropic_client is None:
+            self._anthropic_client = Anthropic(api_key=self.settings.anthropic_api_key)
+        return self._anthropic_client
 
     def _deterministic_sql_payload(self, question: str) -> dict:
         q = question.lower()
