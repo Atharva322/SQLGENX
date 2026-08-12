@@ -92,6 +92,22 @@ class Settings(BaseSettings):
     risk_high_scan_rows: int = Field(default=100_000, alias="RISK_HIGH_SCAN_ROWS")
     ast_validation_enabled: bool = Field(default=True, alias="AST_VALIDATION_ENABLED")
     ast_allow_select_star: bool = Field(default=True, alias="AST_ALLOW_SELECT_STAR")
+    async_runtime_enabled: bool = Field(default=True, alias="ASYNC_RUNTIME_ENABLED")
+    async_query_max_workers: int = Field(default=4, alias="ASYNC_QUERY_MAX_WORKERS")
+    async_query_queue_limit: int = Field(default=8, alias="ASYNC_QUERY_QUEUE_LIMIT")
+    async_query_queue_timeout_seconds: float = Field(
+        default=0.25, alias="ASYNC_QUERY_QUEUE_TIMEOUT_SECONDS"
+    )
+    async_query_total_timeout_seconds: float = Field(
+        default=30.0, alias="ASYNC_QUERY_TOTAL_TIMEOUT_SECONDS"
+    )
+    async_query_retry_after_seconds: int = Field(
+        default=2, alias="ASYNC_QUERY_RETRY_AFTER_SECONDS"
+    )
+    provider_timeout_seconds: float = Field(default=20.0, alias="PROVIDER_TIMEOUT_SECONDS")
+    retrieval_timeout_seconds: float = Field(default=5.0, alias="RETRIEVAL_TIMEOUT_SECONDS")
+    explain_timeout_seconds: float = Field(default=5.0, alias="EXPLAIN_TIMEOUT_SECONDS")
+    statement_timeout_seconds: float = Field(default=10.0, alias="STATEMENT_TIMEOUT_SECONDS")
 
     api_host: str = Field(default="0.0.0.0", alias="API_HOST")
     api_port: int = Field(default=8000, alias="API_PORT")
