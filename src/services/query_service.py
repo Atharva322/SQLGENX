@@ -11,6 +11,8 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from src.config.settings import get_settings
+from src.connections.models import ConnectionNotFoundError, PublicConnection
+from src.connections.repository import LegacyEnvConnectionRepository
 from src.db.engine import available_connections, get_session_factory
 from src.db.schema_introspector import compute_schema_fingerprint, get_schema_summary
 from src.guardrails.rules import (
@@ -73,12 +75,13 @@ class QueryService:
 
     def _normalize_connection_id(self, connection_id: str | None) -> str:
         connections = available_connections()
-        if connection_id and connection_id in connections:
-            return connection_id
-        return "default"
+        cid = connection_id or "default"
+        if cid not in connections:
+            raise ConnectionNotFoundError(f"Connection '{cid}' was not found.")
+        return cid
 
-    def get_connections(self) -> dict[str, str]:
-        return available_connections()
+    def get_connections(self) -> list[PublicConnection]:
+        return LegacyEnvConnectionRepository().list_public()
 
     def _async_runtime_config(self) -> AsyncRuntimeConfig:
         return AsyncRuntimeConfig(

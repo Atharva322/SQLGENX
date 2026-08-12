@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
 
 from src.config.settings import get_settings
+from src.connections.models import ConnectionNotFoundError
+from src.connections.repository import LegacyEnvConnectionRepository
 from src.observability.db_observer import attach_engine_observer
 
 
@@ -16,16 +18,15 @@ _sessionmaker_cache: dict[str, sessionmaker] = {}
 
 
 def available_connections() -> dict[str, str]:
-    urls = {"default": _settings.database_url}
-    urls.update(_settings.connection_urls())
-    return urls
+    return LegacyEnvConnectionRepository().urls()
 
 
 def resolve_database_url(connection_id: str | None) -> str:
     connections = available_connections()
-    if connection_id and connection_id in connections:
-        return connections[connection_id]
-    return connections["default"]
+    cid = connection_id or "default"
+    if cid not in connections:
+        raise ConnectionNotFoundError(f"Connection '{cid}' was not found.")
+    return connections[cid]
 
 
 def _build_engine_kwargs(database_url: str) -> dict:
@@ -83,7 +84,22 @@ def check_connection(connection_id: str | None = None) -> tuple[bool, str | None
             conn.execute(text("SELECT 1"))
         return True, None
     except SQLAlchemyError as exc:
-        return False, str(exc).splitlines()[0]
+        return False, _safe_connection_error_code(str(exc))
+
+
+def _safe_connection_error_code(message: str) -> str:
+    normalized = message.lower()
+    if "password" in normalized or "authentication" in normalized or "access denied" in normalized:
+        return "authentication_failed"
+    if "ssl" in normalized or "tls" in normalized or "certificate" in normalized:
+        return "tls_failed"
+    if "unsupported" in normalized or "server version" in normalized:
+        return "unsupported_version"
+    if "invalid" in normalized or "could not parse" in normalized:
+        return "invalid_config"
+    if "introspect" in normalized or "information_schema" in normalized:
+        return "introspection_failed"
+    return "unreachable"
 
 
 def connections_health() -> dict[str, dict[str, str | bool]]:

@@ -191,9 +191,32 @@ class FeedbackResponse(BaseModel):
     target_file: str
 
 
+class PublicConnectionResponse(BaseModel):
+    id: str
+    display_name: str
+    adapter_key: str
+    dialect: str
+    host: str | None = None
+    port: int | None = None
+    database: str | None = None
+    username: str | None = None
+    tls_mode: str | None = None
+    verification_state: str = "legacy_env"
+    health_state: str = "unknown"
+    last_tested_at: str | None = None
+    schema_fingerprint: str | None = None
+    safe_error_code: str | None = None
+    created_at: str
+    updated_at: str
+
+
 class ConnectionsResponse(BaseModel):
-    connections: dict[str, str] = Field(default_factory=dict)
+    connections: list[PublicConnectionResponse] = Field(default_factory=list)
 
 
 class ConnectionsHealthResponse(BaseModel):
     connections: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+
+class AdapterCatalogResponse(BaseModel):
+    adapters: list[dict[str, Any]] = Field(default_factory=list)

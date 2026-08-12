@@ -37,6 +37,20 @@ services:
       timeout: 5s
       retries: 5
 
+  benchmark-mysql:
+    image: mysql:8.4
+    container_name: sqlgenx-benchmark-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: text2sql_root_pass
+      MYSQL_USER: text2sql_user
+      MYSQL_PASSWORD: text2sql_pass
+      MYSQL_DATABASE: sample_company
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$${MYSQL_USER} -p$${MYSQL_PASSWORD} --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   api:
     build:
       context: .

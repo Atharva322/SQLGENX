@@ -1,0 +1,95 @@
+{
+  "phase": "connection_phase_0_contracts",
+  "branch": "feature/connection-phase-0-contracts",
+  "measured_at": "2026-08-12T13:41:00-07:00",
+  "scope": {
+    "runtime_connection_crud": false,
+    "persistent_runtime_secrets": false,
+    "verified_adapters_exposed": ["postgresql"],
+    "experimental_adapters_hidden_by_default": ["mysql"]
+  },
+  "changes": [
+    "Added ADRs for single database authority, secret boundary, adapter release states, and exact connection ownership.",
+    "Added adapter registry and capability contracts with verified PostgreSQL and experimental MySQL.",
+    "Added connection metadata/redaction contracts, development secret-store interface, engine-key lifecycle contract, and network-policy contract.",
+    "Preserved environment-defined legacy connections through a temporary repository.",
+    "Changed unknown connection IDs from default fallback to explicit connection_not_found.",
+    "Changed /v1/connections to return redacted public metadata instead of URL mappings.",
+    "Added /v1/adapters with verified-only default exposure.",
+    "Added PostgreSQL and MySQL service-container health coverage in CI and Compose."
+  ],
+  "security_evidence": {
+    "unknown_connection_ids_fail_closed": true,
+    "connection_response_contains_full_url": false,
+    "connection_response_contains_password": false,
+    "health_errors_are_safe_codes": true,
+    "normal_adapter_catalog_exposes_experimental_mysql": false
+  },
+  "gates": [
+    {
+      "command": "LLM_PROVIDER=deterministic LLM_MODEL=sqlgenx-fixture-v1 RAG_EMBEDDING_LOCAL_ONLY=true .venv\\Scripts\\python.exe -m pytest tests\\test_connection_adapters.py tests\\test_connections_endpoint.py tests\\test_connections_health_endpoint.py tests\\test_query_endpoint.py",
+      "result": "pass",
+      "evidence": "13 passed in 23.96s"
+    },
+    {
+      "command": "LLM_PROVIDER=deterministic LLM_MODEL=sqlgenx-fixture-v1 RAG_EMBEDDING_LOCAL_ONLY=true .venv\\Scripts\\python.exe -m pytest",
+      "result": "pass",
+      "evidence": "97 passed, 1 skipped in 30.85s"
+    },
+    {
+      "command": ".venv\\Scripts\\python.exe -m compileall src tests evals benchmarks",
+      "result": "pass"
+    },
+    {
+      "command": "npm test",
+      "result": "pass",
+      "evidence": "3 files passed, 6 tests passed"
+    },
+    {
+      "command": "npm run build",
+      "result": "pass",
+      "evidence": "Next.js production build compiled successfully"
+    },
+    {
+      "command": "DATABASE_URL=postgresql://text2sql_user:***@localhost:55432/sample_company CONNECTION_URLS_JSON={} LLM_PROVIDER=deterministic LLM_MODEL=sqlgenx-fixture-v1 RAG_EMBEDDING_LOCAL_ONLY=true SEMANTIC_LAYER_ENABLED=true .venv\\Scripts\\python.exe -m pytest tests\\integration\\test_postgres_benchmark_smoke.py -rs",
+      "result": "pass",
+      "evidence": "1 passed in 25.25s"
+    },
+    {
+      "command": "docker compose ps benchmark-postgres benchmark-mysql",
+      "result": "pass",
+      "evidence": "benchmark-postgres healthy; benchmark-mysql healthy"
+    }
+  ],
+  "quality_matrix": {
+    "command": "evals\\run_evals.py",
+    "result": "pass",
+    "total_cases": 60,
+    "success_rate": 1.0,
+    "hallucination_detection_rate": 0.769,
+    "guardrail_effectiveness": 1.0,
+    "unsafe_block_rate": 1.0,
+    "false_block_rate": 0.0,
+    "schema_recall_at_5": 0.978,
+    "schema_ndcg_at_5": 0.896,
+    "execution_error_count": 0,
+    "output_buckets": {
+      "answered": 23,
+      "unanswerable": 31,
+      "blocked": 6,
+      "execution_error": 0
+    }
+  },
+  "retrieval_only_matrix": {
+    "command": "evals\\run_evals.py --retrieval-only --limit 20",
+    "result": "pass",
+    "schema_recall_at_5": 1.0,
+    "schema_ndcg_at_5": 0.966,
+    "retrieval_context_available": true
+  },
+  "notes": [
+    "MySQL remains experimental and is not exposed in the default adapter catalog.",
+    "Runtime connection CRUD and persistent secret storage are intentionally deferred to Phase 1.",
+    "Local Docker Compose still emits an obsolete version warning from the existing file header; service health is unaffected."
+  ]
+}
