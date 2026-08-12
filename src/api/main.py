@@ -1,13 +1,20 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 
 from src.adapters.registry import default_adapter_registry
 from src.config.settings import get_settings
-from src.connections.models import ConnectionNotFoundError
-from src.connections.repository import LegacyEnvConnectionRepository
+from src.connections.models import (
+    ConnectionCreateRequest,
+    ConnectionNotFoundError,
+    ConnectionTestRequest,
+    ConnectionTestResponse,
+    ConnectionUpdateRequest,
+    PublicConnection,
+)
+from src.connections.service import DEMO_OWNER_ID, get_connection_service
 from src.db.engine import connections_health
-from src.db.schema_introspector import get_schema_summary
+from src.db.schema_introspector import get_schema_summary, refresh_schema_summary
 from src.models.schemas import (
     AdapterCatalogResponse,
     ConnectionsHealthResponse,
@@ -23,6 +30,17 @@ from src.services.query_service import QueryService
 from src.runtime.async_runtime import AsyncRuntimeOverloaded, AsyncRuntimeTimeout, close_query_runtime
 
 service = QueryService()
+
+
+def _owner_id(x_owner_id: str | None = Header(default=None)) -> str:
+    return x_owner_id.strip() if x_owner_id and x_owner_id.strip() else DEMO_OWNER_ID
+
+
+def _connection_not_found(exc: Exception) -> HTTPException:
+    return HTTPException(
+        status_code=404,
+        detail={"error": "connection_not_found", "message": str(exc)},
+    )
 
 
 @asynccontextmanager
@@ -41,7 +59,7 @@ def health() -> dict[str, str]:
 
 
 @app.post("/v1/query", response_model=QueryResponse)
-async def query(payload: QueryRequest) -> QueryResponse:
+async def query(payload: QueryRequest, owner_id: str = Depends(_owner_id)) -> QueryResponse:
     row_limit = payload.options.row_limit if payload.options else None
     try:
         return await service.process_question_async(
@@ -50,6 +68,7 @@ async def query(payload: QueryRequest) -> QueryResponse:
             session_id=payload.session_id,
             row_limit_override=row_limit,
             sql_override=payload.sql_override,
+            owner_id=owner_id,
         )
     except AsyncRuntimeOverloaded as exc:
         raise HTTPException(
@@ -74,15 +93,18 @@ async def query(payload: QueryRequest) -> QueryResponse:
             },
         ) from exc
     except ConnectionNotFoundError as exc:
-        raise HTTPException(status_code=404, detail={"error": "connection_not_found", "message": str(exc)}) from exc
+        raise _connection_not_found(exc) from exc
 
 
 @app.get("/v1/schema", response_model=SchemaResponse)
-def schema(connection_id: str | None = Query(default=None)) -> SchemaResponse:
+def schema(
+    connection_id: str | None = Query(default=None),
+    owner_id: str = Depends(_owner_id),
+) -> SchemaResponse:
     try:
-        summary = get_schema_summary(connection_id=connection_id)
+        summary = get_schema_summary(connection_id=connection_id, owner_id=owner_id)
     except ConnectionNotFoundError as exc:
-        raise HTTPException(status_code=404, detail={"error": "connection_not_found", "message": str(exc)}) from exc
+        raise _connection_not_found(exc) from exc
     return SchemaResponse(tables=summary.get("tables", []))
 
 
@@ -105,13 +127,98 @@ def feedback(payload: FeedbackRequest) -> FeedbackResponse:
 
 
 @app.get("/v1/connections", response_model=ConnectionsResponse)
-def connections() -> ConnectionsResponse:
+def connections(owner_id: str = Depends(_owner_id)) -> ConnectionsResponse:
     return ConnectionsResponse(
         connections=[
             connection.model_dump()
-            for connection in LegacyEnvConnectionRepository().list_public()
+            for connection in get_connection_service().list_public(owner_id)
         ]
     )
+
+
+@app.post("/v1/connections/test", response_model=ConnectionTestResponse)
+def test_connection(payload: ConnectionTestRequest) -> ConnectionTestResponse:
+    return get_connection_service().test(payload)
+
+
+@app.post("/v1/connections", response_model=PublicConnection)
+def create_connection(
+    payload: ConnectionCreateRequest,
+    owner_id: str = Depends(_owner_id),
+) -> PublicConnection:
+    try:
+        connection = get_connection_service().create(owner_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"error": "invalid_config", "message": str(exc)}) from exc
+    if connection.verification_state == "failed":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "connection_test_failed",
+                "safe_error_code": connection.safe_error_code,
+            },
+        )
+    return connection
+
+
+@app.get("/v1/connections/health", response_model=ConnectionsHealthResponse)
+def connections_healthcheck(owner_id: str = Depends(_owner_id)) -> ConnectionsHealthResponse:
+    try:
+        health = connections_health(owner_id=owner_id)
+    except TypeError:
+        health = connections_health()
+    return ConnectionsHealthResponse(connections=health)
+
+
+@app.get("/v1/connections/{connection_id}", response_model=PublicConnection)
+def get_connection(connection_id: str, owner_id: str = Depends(_owner_id)) -> PublicConnection:
+    try:
+        return get_connection_service().get_public(owner_id, connection_id)
+    except ConnectionNotFoundError as exc:
+        raise _connection_not_found(exc) from exc
+
+
+@app.patch("/v1/connections/{connection_id}", response_model=PublicConnection)
+def update_connection(
+    connection_id: str,
+    payload: ConnectionUpdateRequest,
+    owner_id: str = Depends(_owner_id),
+) -> PublicConnection:
+    try:
+        return get_connection_service().update(owner_id, connection_id, payload)
+    except ConnectionNotFoundError as exc:
+        raise _connection_not_found(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"error": "invalid_config", "message": str(exc)}) from exc
+
+
+@app.delete("/v1/connections/{connection_id}", response_model=PublicConnection)
+def delete_connection(connection_id: str, owner_id: str = Depends(_owner_id)) -> PublicConnection:
+    try:
+        return get_connection_service().delete(owner_id, connection_id)
+    except ConnectionNotFoundError as exc:
+        raise _connection_not_found(exc) from exc
+
+
+@app.get("/v1/connections/{connection_id}/schema", response_model=SchemaResponse)
+def connection_schema(connection_id: str, owner_id: str = Depends(_owner_id)) -> SchemaResponse:
+    try:
+        summary = get_schema_summary(connection_id=connection_id, owner_id=owner_id)
+    except ConnectionNotFoundError as exc:
+        raise _connection_not_found(exc) from exc
+    return SchemaResponse(tables=summary.get("tables", []))
+
+
+@app.post("/v1/connections/{connection_id}/schema/refresh", response_model=SchemaResponse)
+def refresh_connection_schema(
+    connection_id: str,
+    owner_id: str = Depends(_owner_id),
+) -> SchemaResponse:
+    try:
+        summary = refresh_schema_summary(connection_id=connection_id, owner_id=owner_id)
+    except ConnectionNotFoundError as exc:
+        raise _connection_not_found(exc) from exc
+    return SchemaResponse(tables=summary.get("tables", []))
 
 
 @app.get("/v1/adapters", response_model=AdapterCatalogResponse)
@@ -142,9 +249,4 @@ def adapters(include_experimental: bool = Query(default=False)) -> AdapterCatalo
             }
         )
     return AdapterCatalogResponse(adapters=items)
-
-
-@app.get("/v1/connections/health", response_model=ConnectionsHealthResponse)
-def connections_healthcheck() -> ConnectionsHealthResponse:
-    return ConnectionsHealthResponse(connections=connections_health())
 

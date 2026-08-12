@@ -23,6 +23,62 @@ class ConnectionNotFoundError(LookupError):
     pass
 
 
+class ConnectionAccessError(PermissionError):
+    pass
+
+
+class PostgresConnectionConfig(BaseModel):
+    host: str = Field(min_length=1, max_length=255)
+    port: int = Field(default=5432, ge=1, le=65535)
+    database: str = Field(min_length=1, max_length=128)
+    username: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=1, max_length=1024)
+    tls_mode: Literal["disable", "prefer", "require", "verify-ca", "verify-full"] = "prefer"
+
+
+class ConnectionTestRequest(BaseModel):
+    adapter_key: Literal["postgresql"]
+    config: PostgresConnectionConfig
+
+
+class ConnectionCreateRequest(ConnectionTestRequest):
+    id: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
+    display_name: str = Field(min_length=1, max_length=120)
+
+
+class ConnectionUpdateRequest(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1, max_length=120)
+    config: PostgresConnectionConfig | None = None
+
+
+class ConnectionTestResponse(BaseModel):
+    ok: bool
+    safe_error_code: ConnectionErrorCode | None = None
+    schema_fingerprint: str | None = None
+
+
+class StoredConnection(BaseModel):
+    id: str
+    owner_id: str
+    display_name: str
+    adapter_key: str
+    dialect: str
+    host: str
+    port: int
+    database: str
+    username: str
+    tls_mode: str | None = None
+    secret_id: str
+    version: int = 1
+    verification_state: ConnectionVerificationState = "verified"
+    health_state: ConnectionHealthState = "unknown"
+    last_tested_at: str | None = None
+    schema_fingerprint: str | None = None
+    safe_error_code: ConnectionErrorCode | None = None
+    created_at: str
+    updated_at: str
+
+
 class PublicConnection(BaseModel):
     id: str
     display_name: str
@@ -38,6 +94,7 @@ class PublicConnection(BaseModel):
     last_tested_at: str | None = None
     schema_fingerprint: str | None = None
     safe_error_code: ConnectionErrorCode | None = None
+    version: int = 1
     created_at: str
     updated_at: str
 
@@ -66,8 +123,31 @@ def public_connection_from_url(connection_id: str, database_url: str) -> PublicC
         database=parsed.database,
         username=parsed.username,
         tls_mode=_tls_mode(parsed),
+        version=1,
         created_at=now,
         updated_at=now,
+    )
+
+
+def public_connection_from_stored(record: StoredConnection) -> PublicConnection:
+    return PublicConnection(
+        id=record.id,
+        display_name=record.display_name,
+        adapter_key=record.adapter_key,
+        dialect=record.dialect,
+        host=record.host,
+        port=record.port,
+        database=record.database,
+        username=record.username,
+        tls_mode=record.tls_mode,
+        verification_state=record.verification_state,
+        health_state=record.health_state,
+        last_tested_at=record.last_tested_at,
+        schema_fingerprint=record.schema_fingerprint,
+        safe_error_code=record.safe_error_code,
+        version=record.version,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
     )
 
 

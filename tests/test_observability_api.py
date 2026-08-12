@@ -46,7 +46,7 @@ def test_query_response_keeps_old_meta_and_adds_trace_fields(monkeypatch) -> Non
     monkeypatch.setattr("src.services.query_service.get_settings", lambda: settings)
     service = QueryService()
     service.settings = settings
-    main.service = service
+    monkeypatch.setattr(main, "service", service)
 
     monkeypatch.setattr(
         "src.services.query_service.get_schema_summary",

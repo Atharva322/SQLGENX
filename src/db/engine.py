@@ -17,16 +17,28 @@ _engine_cache: dict[str, Engine] = {}
 _sessionmaker_cache: dict[str, sessionmaker] = {}
 
 
-def available_connections() -> dict[str, str]:
-    return LegacyEnvConnectionRepository().urls()
+def available_connections(owner_id: str | None = None) -> dict[str, str]:
+    urls = LegacyEnvConnectionRepository().urls()
+    if owner_id:
+        from src.connections.service import get_connection_service
+
+        for connection in get_connection_service().repository.list(owner_id):
+            urls[connection.id] = "<runtime>"
+    return urls
 
 
-def resolve_database_url(connection_id: str | None) -> str:
-    connections = available_connections()
+def resolve_database_url(connection_id: str | None, owner_id: str | None = None) -> str:
+    legacy_connections = LegacyEnvConnectionRepository().urls()
     cid = connection_id or "default"
-    if cid not in connections:
-        raise ConnectionNotFoundError(f"Connection '{cid}' was not found.")
-    return connections[cid]
+    if cid in legacy_connections:
+        return legacy_connections[cid]
+    if owner_id:
+        from src.connections.service import get_connection_service
+
+        runtime = get_connection_service().resolve_runtime_url(owner_id, cid)
+        if runtime is not None:
+            return runtime[0]
+    raise ConnectionNotFoundError(f"Connection '{cid}' was not found.")
 
 
 def _build_engine_kwargs(database_url: str) -> dict:
@@ -45,30 +57,52 @@ def _build_engine_kwargs(database_url: str) -> dict:
     return kwargs
 
 
-def get_engine(connection_id: str | None = None) -> Engine:
+def _engine_cache_key(connection_id: str | None, owner_id: str | None = None) -> str:
     cid = connection_id or "default"
-    if cid in _engine_cache:
-        return _engine_cache[cid]
-    resolved_url = resolve_database_url(cid)
+    legacy_connections = LegacyEnvConnectionRepository().urls()
+    if cid in legacy_connections:
+        return cid
+    if owner_id:
+        from src.connections.service import get_connection_service
+
+        runtime = get_connection_service().resolve_runtime_url(owner_id, cid)
+        if runtime is not None:
+            _, version = runtime
+            return f"{owner_id}:{cid}:v{version}"
+    return cid
+
+
+def dispose_connection_engine(connection_id: str, owner_id: str | None = None) -> None:
+    prefix = f"{owner_id}:{connection_id}:" if owner_id else connection_id
+    for key in [key for key in _engine_cache if key == prefix or key.startswith(prefix)]:
+        _engine_cache.pop(key).dispose()
+        _sessionmaker_cache.pop(key, None)
+
+
+def get_engine(connection_id: str | None = None, owner_id: str | None = None) -> Engine:
+    cache_key = _engine_cache_key(connection_id, owner_id)
+    if cache_key in _engine_cache:
+        return _engine_cache[cache_key]
+    resolved_url = resolve_database_url(connection_id, owner_id=owner_id)
     engine = create_engine(resolved_url, **_build_engine_kwargs(resolved_url))
     attach_engine_observer(engine)
-    _engine_cache[cid] = engine
+    _engine_cache[cache_key] = engine
     return engine
 
 
-def get_session_factory(connection_id: str | None = None) -> sessionmaker:
-    cid = connection_id or "default"
-    if cid in _sessionmaker_cache:
-        return _sessionmaker_cache[cid]
+def get_session_factory(connection_id: str | None = None, owner_id: str | None = None) -> sessionmaker:
+    cache_key = _engine_cache_key(connection_id, owner_id)
+    if cache_key in _sessionmaker_cache:
+        return _sessionmaker_cache[cache_key]
     factory = sessionmaker(
-        bind=get_engine(cid), autoflush=False, autocommit=False, future=True
+        bind=get_engine(connection_id, owner_id=owner_id), autoflush=False, autocommit=False, future=True
     )
-    _sessionmaker_cache[cid] = factory
+    _sessionmaker_cache[cache_key] = factory
     return factory
 
 
-def get_db_session(connection_id: str | None = None) -> Iterator[Session]:
-    factory = get_session_factory(connection_id)
+def get_db_session(connection_id: str | None = None, owner_id: str | None = None) -> Iterator[Session]:
+    factory = get_session_factory(connection_id, owner_id=owner_id)
     db = factory()
     try:
         yield db
@@ -76,10 +110,10 @@ def get_db_session(connection_id: str | None = None) -> Iterator[Session]:
         db.close()
 
 
-def check_connection(connection_id: str | None = None) -> tuple[bool, str | None]:
+def check_connection(connection_id: str | None = None, owner_id: str | None = None) -> tuple[bool, str | None]:
     cid = connection_id or "default"
     try:
-        engine = get_engine(cid)
+        engine = get_engine(cid, owner_id=owner_id)
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         return True, None
@@ -102,9 +136,9 @@ def _safe_connection_error_code(message: str) -> str:
     return "unreachable"
 
 
-def connections_health() -> dict[str, dict[str, str | bool]]:
+def connections_health(owner_id: str | None = None) -> dict[str, dict[str, str | bool]]:
     health: dict[str, dict[str, str | bool]] = {}
-    for cid in available_connections().keys():
-        ok, error = check_connection(cid)
+    for cid in available_connections(owner_id=owner_id).keys():
+        ok, error = check_connection(cid, owner_id=owner_id)
         health[cid] = {"healthy": ok, "error": error or ""}
     return health

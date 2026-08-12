@@ -4,7 +4,14 @@ from pathlib import Path
 from src.api.main import app
 
 
-def test_history_filters_by_session() -> None:
+def test_history_filters_by_session(monkeypatch) -> None:
+    from src.api import main
+    from src.config.settings import get_settings
+    from src.services.query_service import QueryService
+
+    monkeypatch.setenv("LLM_PROVIDER", "deterministic")
+    get_settings.cache_clear()
+    monkeypatch.setattr(main, "service", QueryService())
     client = TestClient(app)
     payload_a = client.post(
         "/v1/query", json={"question": "Show all employees", "session_id": "s1"}
@@ -20,9 +27,14 @@ def test_history_filters_by_session() -> None:
 
 def test_feedback_endpoint_stores_verdict(monkeypatch) -> None:
     from src.api import main
+    from src.config.settings import get_settings
+    from src.services.query_service import QueryService
 
     target_path = Path("logs") / "test_feedback_incorrect.jsonl"
     target_path.unlink(missing_ok=True)
+    monkeypatch.setenv("LLM_PROVIDER", "deterministic")
+    get_settings.cache_clear()
+    monkeypatch.setattr(main, "service", QueryService())
     monkeypatch.setattr(
         main.service,
         "_feedback_target_file",

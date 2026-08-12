@@ -28,3 +28,10 @@ class EphemeralSecretStore:
 
     def delete(self, secret_id: str) -> None:
         self._values.pop(secret_id, None)
+
+
+_EPHEMERAL_SECRET_STORE = EphemeralSecretStore()
+
+
+def get_secret_store() -> EphemeralSecretStore:
+    return _EPHEMERAL_SECRET_STORE

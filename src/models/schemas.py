@@ -206,6 +206,7 @@ class PublicConnectionResponse(BaseModel):
     last_tested_at: str | None = None
     schema_fingerprint: str | None = None
     safe_error_code: str | None = None
+    version: int = 1
     created_at: str
     updated_at: str
 

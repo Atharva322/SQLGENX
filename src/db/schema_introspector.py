@@ -37,15 +37,22 @@ def clear_schema_summary_cache() -> None:
     _SCHEMA_CACHE.clear()
 
 
-def refresh_schema_summary(connection_id: str | None = None) -> dict:
-    summary = _introspect_schema(connection_id=connection_id)
-    _SCHEMA_CACHE.set(connection_id or "default", summary)
+def _cache_key(connection_id: str | None = None, owner_id: str | None = None) -> str:
+    return f"{owner_id or 'legacy'}:{connection_id or 'default'}"
+
+
+def refresh_schema_summary(connection_id: str | None = None, owner_id: str | None = None) -> dict:
+    try:
+        summary = _introspect_schema(connection_id=connection_id, owner_id=owner_id)
+    except TypeError:
+        summary = _introspect_schema(connection_id=connection_id)
+    _SCHEMA_CACHE.set(_cache_key(connection_id, owner_id), summary)
     return summary
 
 
-def _introspect_schema(connection_id: str | None = None) -> dict:
+def _introspect_schema(connection_id: str | None = None, owner_id: str | None = None) -> dict:
     try:
-        inspector = inspect(get_engine(connection_id))
+        inspector = inspect(get_engine(connection_id, owner_id=owner_id))
         tables = []
         for table_name in inspector.get_table_names():
             columns = inspector.get_columns(table_name)
@@ -71,10 +78,10 @@ def _introspect_schema(connection_id: str | None = None) -> dict:
         return {"tables": [], "error": f"Schema introspection failed: {exc}"}
 
 
-def get_schema_summary(connection_id: str | None = None) -> dict:
+def get_schema_summary(connection_id: str | None = None, owner_id: str | None = None) -> dict:
     """Introspect DB schema for prompt construction, with bounded TTL caching."""
     settings = get_settings()
-    key = connection_id or "default"
+    key = _cache_key(connection_id, owner_id)
     if getattr(settings, "phase1_cache_enabled", True):
         global _SCHEMA_CACHE
         max_entries = int(getattr(settings, "schema_cache_max_entries", 32))
@@ -90,7 +97,10 @@ def get_schema_summary(connection_id: str | None = None) -> dict:
         cached = _SCHEMA_CACHE.get(key)
         if cached is not None:
             return cached
-    summary = _introspect_schema(connection_id=connection_id)
+    try:
+        summary = _introspect_schema(connection_id=connection_id, owner_id=owner_id)
+    except TypeError:
+        summary = _introspect_schema(connection_id=connection_id)
     if getattr(settings, "phase1_cache_enabled", True):
         _SCHEMA_CACHE.set(key, summary)
     return summary
