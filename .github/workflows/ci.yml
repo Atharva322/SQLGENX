@@ -62,6 +62,39 @@ jobs:
       - run: pytest -q -m integration
       - run: python benchmarks/run_latency.py --profile integration-service --repetitions 1 --limit 5
 
+  connection-service-containers:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: text2sql_user
+          POSTGRES_PASSWORD: text2sql_pass
+          POSTGRES_DB: sample_company
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U text2sql_user"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: text2sql_root_pass
+          MYSQL_USER: text2sql_user
+          MYSQL_PASSWORD: text2sql_pass
+          MYSQL_DATABASE: sample_company
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -utext2sql_user -ptext2sql_pass --silent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - run: echo "PostgreSQL and MySQL service containers are healthy."
+
   evaluation-smoke:
     runs-on: ubuntu-latest
     services:

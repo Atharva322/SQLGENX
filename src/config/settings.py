@@ -110,6 +110,9 @@ class Settings(BaseSettings):
     statement_timeout_seconds: float = Field(default=10.0, alias="STATEMENT_TIMEOUT_SECONDS")
     semantic_layer_enabled: bool = Field(default=True, alias="SEMANTIC_LAYER_ENABLED")
     semantic_layer_path: str = Field(default="semantic/metrics.yaml", alias="SEMANTIC_LAYER_PATH")
+    connection_adapter_experimental_catalog_enabled: bool = Field(
+        default=False, alias="CONNECTION_ADAPTER_EXPERIMENTAL_CATALOG_ENABLED"
+    )
 
     api_host: str = Field(default="0.0.0.0", alias="API_HOST")
     api_port: int = Field(default=8000, alias="API_PORT")
