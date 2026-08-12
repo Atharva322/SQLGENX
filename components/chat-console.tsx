@@ -75,6 +75,7 @@ export function ChatConsole(): React.JSX.Element {
       }
       const payload = data as GenerateSqlResponse;
       setGenerated(payload);
+      setExecuted(payload.preExecuted ?? null);
       setConversationId(payload.conversationId);
       setMessages((prev) => [...prev, { role: "user", text: question }, { role: "assistant", text: payload.explanation }]);
       setQuestion("");
@@ -118,7 +119,7 @@ export function ChatConsole(): React.JSX.Element {
       <div className="card">
         <h1 style={{ marginTop: 0 }}>Enterprise NL to SQL Assistant</h1>
         <p style={{ color: "var(--ink-soft)" }}>
-          Ask in plain English. Review generated MySQL SQL. Run only after approval.
+          Ask in plain English. Review generated SQL against the connected GENXSQL schema.
         </p>
         <div className="stack">
           <textarea

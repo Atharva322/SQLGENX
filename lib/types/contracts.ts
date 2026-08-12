@@ -22,6 +22,7 @@ export interface GenerateSqlResponse {
     status: SafetyStatus;
     reasons: string[];
   };
+  preExecuted?: ExecuteSqlResponse;
 }
 
 export interface ExecuteSqlRequest {

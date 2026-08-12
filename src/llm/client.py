@@ -65,6 +65,13 @@ def _fixture(
     }
 
 
+def _requested_limit(question: str, default: int = 1000) -> int:
+    match = re.search(r"\b(?:top|first|limit)\s+(\d{1,4})\b", question)
+    if not match:
+        return default
+    return max(1, min(int(match.group(1)), default))
+
+
 BENCHMARK_SQL_FIXTURES: dict[str, dict] = {
     "list employees in engineering": _fixture(
         "SELECT e.first_name, e.last_name, d.name AS department_name FROM employees e JOIN departments d ON e.department_id = d.id WHERE d.name = 'Engineering'",
@@ -529,14 +536,6 @@ class LLMClient:
             tables = fixture["tables_accessed"]
             columns = fixture["columns_accessed"]
             explanation = fixture["explanation"]
-        elif "department" in q and "employee" in q:
-            sql = (
-                "SELECT e.first_name, e.last_name, d.name AS department_name "
-                "FROM employees e JOIN departments d ON e.department_id = d.id"
-            )
-            tables = ["employees", "departments"]
-            columns = ["employees.first_name", "employees.last_name", "departments.name"]
-            explanation = "Join employees to departments."
         elif "employees in engineering" in q:
             sql = (
                 "SELECT e.first_name, e.last_name FROM employees e "
@@ -545,6 +544,14 @@ class LLMClient:
             tables = ["employees", "departments"]
             columns = ["employees.first_name", "employees.last_name", "departments.name"]
             explanation = "Filter employees by Engineering department."
+        elif "department" in q and "employee" in q:
+            sql = (
+                "SELECT e.first_name, e.last_name, d.name AS department_name "
+                "FROM employees e JOIN departments d ON e.department_id = d.id"
+            )
+            tables = ["employees", "departments"]
+            columns = ["employees.first_name", "employees.last_name", "departments.name"]
+            explanation = "Join employees to departments."
         elif "hired after" in q:
             sql = "SELECT first_name, last_name, hired_at FROM employees WHERE hired_at > '2021-01-01'"
             tables = ["employees"]
@@ -581,8 +588,8 @@ class LLMClient:
             tables = ["departments"]
             columns = ["departments.name", "departments.cost_center"]
             explanation = "List departments."
-        elif "all employees" in q or "show employees" in q:
-            sql = "SELECT first_name, last_name, title FROM employees"
+        elif any(phrase in q for phrase in ["all employees", "show employees", "list employees", "get me top"]):
+            sql = f"SELECT first_name, last_name, title FROM employees LIMIT {_requested_limit(q)}"
             tables = ["employees"]
             columns = ["employees.first_name", "employees.last_name", "employees.title"]
             explanation = "List employees."
