@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { requireSession } from "@/lib/auth/session";
-import { getSchemaContext } from "@/lib/schema/cache";
+import { refreshConnectionSchema } from "@/lib/genxsql-api";
 
-export async function POST(): Promise<Response> {
+export async function POST(req: Request): Promise<Response> {
   try {
-    await requireSession();
-    const schema = await getSchemaContext(true);
-    return NextResponse.json(schema);
+    const user = await requireSession();
+    const connectionId = new URL(req.url).searchParams.get("connectionId") ?? "default";
+    return NextResponse.json(await refreshConnectionSchema(user.userId, connectionId));
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to refresh schema context.";
     return NextResponse.json({ error: message }, { status: 400 });
