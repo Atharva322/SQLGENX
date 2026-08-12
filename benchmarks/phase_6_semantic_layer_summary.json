@@ -1,0 +1,161 @@
+{
+  "phase": "phase_6_semantic_layer",
+  "branch": "perf/phase-6-semantic-layer",
+  "base_head_before_phase": "6c72efe",
+  "measured_at": "2026-08-12T11:24:00-07:00",
+  "environment": {
+    "database": "benchmark-postgres",
+    "database_url_redacted": "postgresql://text2sql_user:***@localhost:55432/sample_company",
+    "llm_provider": "deterministic",
+    "llm_model": "sqlgenx-fixture-v1",
+    "rag_embedding_local_only": true,
+    "semantic_layer_enabled": true
+  },
+  "semantic_definition": {
+    "path": "semantic/metrics.yaml",
+    "semantic_layer_id": "sample_company_semantics",
+    "version": "2026.08.12",
+    "metrics": 5,
+    "dimensions": 6,
+    "approved_joins": 5
+  },
+  "gates": [
+    {
+      "command": ".venv\\Scripts\\python.exe -m src.semantic.cli lint",
+      "result": "pass",
+      "evidence": {
+        "valid": true,
+        "metric_count": 5,
+        "dimension_count": 6,
+        "approved_join_count": 5
+      }
+    },
+    {
+      "command": ".venv\\Scripts\\python.exe -m src.semantic.cli test",
+      "result": "pass",
+      "evidence": {
+        "valid": true,
+        "test_count": 5
+      }
+    },
+    {
+      "command": "LLM_PROVIDER=deterministic LLM_MODEL=sqlgenx-fixture-v1 RAG_EMBEDDING_LOCAL_ONLY=true .venv\\Scripts\\python.exe -m pytest tests\\test_semantic_layer.py tests\\test_context_index.py tests\\test_query_endpoint.py",
+      "result": "pass",
+      "evidence": "21 passed in 19.86s"
+    },
+    {
+      "command": "LLM_PROVIDER=deterministic LLM_MODEL=sqlgenx-fixture-v1 RAG_EMBEDDING_LOCAL_ONLY=true .venv\\Scripts\\python.exe -m pytest",
+      "result": "pass",
+      "evidence": "90 passed, 1 skipped in 23.54s"
+    },
+    {
+      "command": ".venv\\Scripts\\python.exe -m compileall src tests evals",
+      "result": "pass"
+    },
+    {
+      "command": "DATABASE_URL=postgresql://text2sql_user:***@localhost:55432/sample_company CONNECTION_URLS_JSON={} LLM_PROVIDER=deterministic LLM_MODEL=sqlgenx-fixture-v1 RAG_EMBEDDING_LOCAL_ONLY=true SEMANTIC_LAYER_ENABLED=true .venv\\Scripts\\python.exe -m pytest tests\\integration\\test_postgres_benchmark_smoke.py -rs",
+      "result": "pass",
+      "evidence": "1 passed in 20.53s"
+    },
+    {
+      "command": "npm test",
+      "result": "pass",
+      "evidence": "3 files passed, 6 tests passed"
+    },
+    {
+      "command": "npm run build",
+      "result": "pass",
+      "evidence": "Next.js production build compiled successfully"
+    }
+  ],
+  "quality_matrix": {
+    "command": "evals\\run_evals.py",
+    "result": "pass",
+    "total_cases": 60,
+    "success_rate": 1.0,
+    "hallucination_detection_rate": 0.769,
+    "guardrail_effectiveness": 1.0,
+    "unsafe_block_rate": 1.0,
+    "false_block_rate": 0.0,
+    "schema_recall_at_5": 0.978,
+    "schema_ndcg_at_5": 0.896,
+    "execution_error_count": 0,
+    "output_buckets": {
+      "answered": 23,
+      "unanswerable": 31,
+      "blocked": 6,
+      "execution_error": 0
+    },
+    "validation_level_counts": {
+      "standard": 37,
+      "fast": 8,
+      "strict": 15
+    }
+  },
+  "retrieval_only_matrix": {
+    "command": "evals\\run_evals.py --retrieval-only --limit 20",
+    "result": "pass",
+    "total_cases": 20,
+    "schema_recall_at_5": 1.0,
+    "schema_ndcg_at_5": 0.966,
+    "retrieval_context_available": true
+  },
+  "latency_sample": {
+    "question": "Show total revenue by region",
+    "samples_per_mode": 30,
+    "semantic_enabled": {
+      "strategy": "semantic_layer_compile",
+      "p50_ms": 101.655,
+      "p95_ms": 133.571,
+      "mean_ms": 105.329,
+      "avg_llm_calls": 0.0
+    },
+    "semantic_disabled": {
+      "strategy": "primary_then_adaptive_validation",
+      "p50_ms": 109.806,
+      "p95_ms": 174.963,
+      "mean_ms": 119.989,
+      "avg_llm_calls": 3.0
+    }
+  },
+  "demo": {
+    "command": ".venv\\Scripts\\python.exe scripts\\demo_semantic_layer.py",
+    "result": "pass",
+    "cases": [
+      {
+        "question": "Show total revenue by region",
+        "strategy": "semantic_layer_compile",
+        "metric": "total_revenue",
+        "llm_call_count": 0,
+        "row_count": 2
+      },
+      {
+        "question": "Bookings by territory",
+        "strategy": "semantic_layer_compile",
+        "metric": "total_revenue",
+        "llm_call_count": 0,
+        "row_count": 2
+      },
+      {
+        "question": "Average salary by department",
+        "strategy": "semantic_layer_compile",
+        "metric": "average_salary",
+        "llm_call_count": 0,
+        "row_count": 3
+      },
+      {
+        "question": "Show total revenue by department",
+        "strategy": "semantic_layer_unsupported",
+        "metric": "total_revenue",
+        "sql": "UNANSWERABLE",
+        "row_count": 0
+      },
+      {
+        "question": "List employees in Engineering",
+        "strategy": "primary_then_adaptive_validation",
+        "metric": null,
+        "row_count": 1
+      }
+    ]
+  }
+}

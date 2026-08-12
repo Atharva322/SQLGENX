@@ -60,6 +60,7 @@ class ExecutionMeta(BaseModel):
     ast_valid: bool | None = None
     ast_fingerprint: str | None = None
     ast_reason_codes: list[str] = Field(default_factory=list)
+    semantic_layer: dict[str, Any] = Field(default_factory=dict)
     timeout_stage: str | None = None
     failure_stage: str | None = None
     llm_token_usage: dict[str, Any] = Field(default_factory=dict)

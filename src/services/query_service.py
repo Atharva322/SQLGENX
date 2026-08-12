@@ -3,6 +3,7 @@ from contextlib import nullcontext
 from time import perf_counter
 from uuid import uuid4
 import json
+import re
 from typing import Any
 
 import pandas as pd
@@ -53,6 +54,7 @@ from src.validation.sanity import analyze_result_sanity
 from src.validation.ast_sql import analyze_sql_ast
 from src.validation.sql_constraints import validate_sql_identifiers
 from src.runtime.async_runtime import AsyncRuntimeConfig, get_query_runtime
+from src.semantic.layer import SemanticCompileResult, SemanticLayer
 
 
 class QueryService:
@@ -342,6 +344,53 @@ class QueryService:
             notes=notes or list(fallback_plan.notes),
         )
 
+    def _semantic_layer(self) -> SemanticLayer:
+        return SemanticLayer.from_path(str(getattr(self.settings, "semantic_layer_path", "semantic/metrics.yaml")))
+
+    def _try_semantic_compile(
+        self, question: str, schema: dict[str, Any]
+    ) -> SemanticCompileResult:
+        if not bool(getattr(self.settings, "semantic_layer_enabled", False)):
+            return SemanticCompileResult(matched=False, reason="semantic_layer_disabled")
+        layer = self._semantic_layer()
+        return layer.compile_question(question, schema)
+
+    def _apply_semantic_linking_whitelist(self, linking: LinkingContext, disclosure: dict[str, Any]) -> None:
+        tables: set[str] = set(linking.resolved.tables)
+        columns: set[str] = set(linking.resolved.columns)
+        join_hints: set[str] = set(linking.resolved.join_hints)
+        metric = disclosure.get("metric", {})
+        expression = str(metric.get("expression", ""))
+        for table, column in self._semantic_column_refs(expression):
+            tables.add(table)
+            columns.add(f"{table}.{column}")
+        for dimension in disclosure.get("dimensions", []) or []:
+            for table, column in self._semantic_column_refs(str(dimension.get("expression", ""))):
+                tables.add(table)
+                columns.add(f"{table}.{column}")
+        for filter_def in disclosure.get("filters", []) or []:
+            for table, column in self._semantic_column_refs(str(filter_def.get("expression", ""))):
+                tables.add(table)
+                columns.add(f"{table}.{column}")
+        for join in disclosure.get("joins", []) or []:
+            left = str(join.get("left", ""))
+            right = str(join.get("right", ""))
+            for ref in (left, right):
+                if "." in ref:
+                    table, column = ref.split(".", 1)
+                    tables.add(table)
+                    columns.add(f"{table}.{column}")
+                    join_hints.add(table)
+        linking.resolved.tables = sorted(tables)
+        linking.resolved.columns = sorted(columns)
+        linking.resolved.join_hints = sorted(join_hints or tables)
+
+    def _semantic_column_refs(self, expression: str) -> list[tuple[str, str]]:
+        refs: list[tuple[str, str]] = []
+        for table, column in re.findall(r"\b([a-z][a-z0-9_]*)\.([a-z][a-z0-9_]*)\b", expression):
+            refs.append((table, column))
+        return refs
+
     def _risk_thresholds(self) -> RiskThresholds:
         return RiskThresholds(
             fast_max_score=float(getattr(self.settings, "risk_fast_max_score", 0.34)),
@@ -426,6 +475,9 @@ class QueryService:
         validation_level = trace.validation_level if trace else "strict"
         if guarded_sql.strip().upper() == "UNANSWERABLE":
             validation_level = "strict"
+        if reasoning and reasoning.strategy == "semantic_layer_compile":
+            validation_level = "fast"
+            warnings.append("Policy: LLM alignment validation skipped for deterministic semantic metric.")
         if validation_level in {"standard", "strict"}:
             with (trace.timer("alignment_validation_ms") if trace else nullcontext()):
                 if request_context:
@@ -628,6 +680,9 @@ class QueryService:
             response.execution_meta.ast_valid = bool(ast_state.get("valid"))
             response.execution_meta.ast_fingerprint = ast_state.get("fingerprint")
             response.execution_meta.ast_reason_codes = list(ast_state.get("reason_codes", []) or [])
+        semantic_state = snapshot.cache_state.get("semantic_layer")
+        if isinstance(semantic_state, dict):
+            response.execution_meta.semantic_layer = dict(semantic_state)
         response.execution_meta.timeout_stage = snapshot.timeout_stage
         response.execution_meta.failure_stage = snapshot.failure_stage
         if snapshot.llm_token_usage:
@@ -741,7 +796,63 @@ class QueryService:
                 and (low_confidence or not require_low_confidence)
             )
         )
-        if (
+        semantic_result = SemanticCompileResult(matched=False, reason="not_evaluated")
+        if not sql_override:
+            with trace.timer("semantic_resolution_ms"):
+                semantic_result = self._try_semantic_compile(question, schema)
+            if semantic_result.disclosure:
+                trace.set_cache_state("semantic_layer", semantic_result.disclosure)
+
+        if not sql_override and semantic_result.matched and semantic_result.unsupported:
+            generated = GeneratedSQL(
+                sql="UNANSWERABLE",
+                explanation=semantic_result.reason,
+                accessed_tables=[],
+                accessed_columns=[],
+                model_confidence=semantic_result.confidence,
+                token_usage={
+                    "provider": "semantic_layer",
+                    "model": semantic_result.metric_version or "",
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                },
+            )
+            reasoning = ReasoningMeta(
+                strategy="semantic_layer_unsupported",
+                selected_candidate=semantic_result.metric_id or "semantic_metric",
+                candidate_scores=[],
+                validator_notes=[semantic_result.reason],
+                query_plan=semantic_result.disclosure or {},
+            )
+        elif not sql_override and semantic_result.matched:
+            disclosure = semantic_result.disclosure or {}
+            self._apply_semantic_linking_whitelist(linking_artifacts.context, disclosure)
+            generated = GeneratedSQL(
+                sql=semantic_result.sql,
+                explanation=semantic_result.explanation,
+                accessed_tables=linking_artifacts.context.resolved.tables,
+                accessed_columns=linking_artifacts.context.resolved.columns,
+                model_confidence=semantic_result.confidence,
+                token_usage={
+                    "provider": "semantic_layer",
+                    "model": semantic_result.metric_version or "",
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                },
+            )
+            reasoning = ReasoningMeta(
+                strategy="semantic_layer_compile",
+                selected_candidate=semantic_result.metric_id or "semantic_metric",
+                candidate_scores=[],
+                validator_notes=[
+                    "Semantic metric compiled deterministically before provider SQL generation.",
+                    semantic_result.reason,
+                ],
+                query_plan=disclosure,
+            )
+        elif (
             self.settings.identifier_resolution_fail_fast_enabled
             and not sql_override
             and severe_resolution_failure
@@ -894,6 +1005,12 @@ class QueryService:
                 "Model returned UNANSWERABLE for missing schema coverage or ambiguity.",
                 "No SQL executed.",
             ]
+            if reasoning.strategy == "semantic_layer_unsupported":
+                warnings = [
+                    generated.explanation,
+                    "Semantic layer rejected the unsupported metric/dimension/filter combination.",
+                    "No SQL executed.",
+                ]
             if severe_fail_fast:
                 warnings = [
                     "Severe fail-fast UNANSWERABLE due to clearly insufficient low-confidence identifier resolution.",

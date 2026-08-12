@@ -1,0 +1,170 @@
+semantic_layer:
+  id: sample_company_semantics
+  version: "2026.08.12"
+  owners:
+    data_steward: analytics@example.com
+  entities:
+    - id: sales
+      table: sales
+      primary_key: id
+      synonyms: [sale, sales, revenue, booking, bookings]
+    - id: employees
+      table: employees
+      primary_key: id
+      synonyms: [employee, employees, staff, sales rep, representative]
+    - id: departments
+      table: departments
+      primary_key: id
+      synonyms: [department, departments, team, cost center]
+    - id: customers
+      table: customers
+      primary_key: id
+      synonyms: [customer, customers, account, accounts]
+    - id: orders
+      table: orders
+      primary_key: id
+      synonyms: [order, orders, purchase, purchases]
+    - id: invoices
+      table: invoices
+      primary_key: id
+      synonyms: [invoice, invoices, billing]
+  approved_joins:
+    - id: sales_employee
+      left_table: sales
+      left_column: employee_id
+      right_table: employees
+      right_column: id
+      relationship: many_to_one
+    - id: employee_department
+      left_table: employees
+      left_column: department_id
+      right_table: departments
+      right_column: id
+      relationship: many_to_one
+    - id: order_customer
+      left_table: orders
+      left_column: customer_id
+      right_table: customers
+      right_column: id
+      relationship: many_to_one
+    - id: invoice_customer
+      left_table: invoices
+      left_column: customer_id
+      right_table: customers
+      right_column: id
+      relationship: many_to_one
+    - id: invoice_order
+      left_table: invoices
+      left_column: order_id
+      right_table: orders
+      right_column: id
+      relationship: many_to_one
+  dimensions:
+    - id: region
+      table: sales
+      expression: sales.region
+      label: Region
+      synonyms: [region, territory, geo]
+      sensitivity: public
+    - id: channel
+      table: sales
+      expression: sales.channel
+      label: Sales Channel
+      synonyms: [channel, route, direct, partner]
+      sensitivity: public
+    - id: department
+      table: departments
+      expression: departments.name
+      label: Department
+      synonyms: [department, team, cost center]
+      sensitivity: internal
+    - id: customer_state
+      table: customers
+      expression: customers.state
+      label: Customer State
+      synonyms: [state, customer state, geography, location]
+      sensitivity: internal
+    - id: order_status
+      table: orders
+      expression: orders.status
+      label: Order Status
+      synonyms: [order status, status]
+      sensitivity: public
+    - id: invoice_status
+      table: invoices
+      expression: invoices.status
+      label: Invoice Status
+      synonyms: [invoice status, paid, open]
+      sensitivity: public
+  filters:
+    - id: paid_invoices
+      table: invoices
+      expression: invoices.status = 'paid'
+      label: Paid invoices only
+      synonyms: [paid invoices, paid invoice, paid]
+  metrics:
+    - id: total_revenue
+      version: "1.0.0"
+      description: Sum of recognized sales amount.
+      source: sales
+      expression: SUM(sales.amount)
+      allowed_dimensions: [region, channel]
+      allowed_filters: []
+      synonyms: [total revenue, revenue, sales total, total sales, bookings]
+      owner: revenue-analytics
+      sensitivity: internal
+      tests:
+        - question: total revenue by region
+          expected_sql: SELECT sales.region AS region, SUM(sales.amount) AS total_revenue FROM sales GROUP BY sales.region ORDER BY sales.region
+    - id: average_salary
+      version: "1.0.0"
+      description: Average employee salary.
+      source: employees
+      expression: AVG(employees.salary)
+      allowed_dimensions: [department]
+      allowed_filters: []
+      synonyms: [average salary, avg salary, mean salary, salary average]
+      owner: people-analytics
+      sensitivity: confidential
+      tests:
+        - question: average salary by department
+          expected_sql: SELECT departments.name AS department, AVG(employees.salary) AS average_salary FROM employees JOIN departments ON employees.department_id = departments.id GROUP BY departments.name ORDER BY departments.name
+    - id: paid_invoice_value
+      version: "1.0.0"
+      description: Sum of invoice value after the approved paid-invoice filter.
+      source: invoices
+      expression: SUM(invoices.total)
+      allowed_dimensions: [invoice_status, customer_state]
+      allowed_filters: [paid_invoices]
+      synonyms: [paid invoice value, paid invoice total, paid invoices, collected invoice value]
+      owner: finance-analytics
+      sensitivity: internal
+      tests:
+        - question: paid invoice value by customer state
+          expected_sql: SELECT customers.state AS customer_state, SUM(invoices.total) AS paid_invoice_value FROM invoices JOIN customers ON invoices.customer_id = customers.id WHERE invoices.status = 'paid' GROUP BY customers.state ORDER BY customers.state
+    - id: order_value
+      version: "1.0.0"
+      description: Sum of order totals.
+      source: orders
+      expression: SUM(orders.total)
+      allowed_dimensions: [order_status, customer_state]
+      allowed_filters: []
+      synonyms: [order value, order total, total order value, gross orders]
+      owner: sales-ops
+      sensitivity: internal
+      tests:
+        - question: order value by customer state
+          expected_sql: SELECT customers.state AS customer_state, SUM(orders.total) AS order_value FROM orders JOIN customers ON orders.customer_id = customers.id GROUP BY customers.state ORDER BY customers.state
+    - id: employee_count
+      version: "1.0.0"
+      description: Count of employees.
+      source: employees
+      expression: COUNT(employees.id)
+      allowed_dimensions: [department]
+      allowed_filters: []
+      synonyms: [employee count, count employees, headcount, staff count]
+      owner: people-analytics
+      sensitivity: internal
+      tests:
+        - question: employee count by department
+          expected_sql: SELECT departments.name AS department, COUNT(employees.id) AS employee_count FROM employees JOIN departments ON employees.department_id = departments.id GROUP BY departments.name ORDER BY departments.name

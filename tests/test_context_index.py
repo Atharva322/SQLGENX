@@ -82,6 +82,7 @@ def test_sqlite_build_reopen_retrieve_and_one_hop() -> None:
     status = index.build("default", "fp-orders", _schema(), _examples())
     assert status.active
     assert status.schema_document_count == 2
+    assert status.semantic_document_count >= 5
 
     reopened = ContextIndex(path)
     hits, meta = reopened.retrieve(
@@ -150,6 +151,7 @@ def test_retriever_uses_index_when_enabled(monkeypatch) -> None:
 
     assert result.retrieval_meta["mode"] == "context_index"
     assert result.retrieval_meta["schema_method"] == "hybrid_rrf"
+    assert result.retrieval_meta["index_semantic_document_count"] >= 5
     assert [table["table"] for table in result.selected_schema_tables] == ["orders", "customers"]
 
 

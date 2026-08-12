@@ -21,6 +21,7 @@ CANONICAL_STAGES = {
     "schema_introspection_ms",
     "feedback_load_ms",
     "schema_linking_ms",
+    "semantic_resolution_ms",
     "prompt_format_ms",
     "query_plan_generation_ms",
     "primary_sql_generation_ms",

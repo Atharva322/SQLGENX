@@ -300,6 +300,7 @@ def _retrieve_from_context_index(
         )
 
     schema_hits = [hit for hit in hits if hit.kind == "schema"]
+    semantic_hits = [hit for hit in hits if hit.kind == "semantic"]
     selected_schema = [
         schema_by_name[hit.table_name]
         for hit in schema_hits
@@ -322,6 +323,9 @@ def _retrieve_from_context_index(
             "index_document_count": status.document_count,
             "index_schema_document_count": status.schema_document_count,
             "index_example_document_count": status.example_document_count,
+            "index_semantic_document_count": getattr(status, "semantic_document_count", 0),
+            "semantic_candidates": len(semantic_hits),
+            "semantic_hits": [hit.payload for hit in semantic_hits],
             "index_stale": status.stale,
             "example_method": example_method,
             "example_avg_score": example_score,

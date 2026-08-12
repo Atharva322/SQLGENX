@@ -108,6 +108,8 @@ class Settings(BaseSettings):
     retrieval_timeout_seconds: float = Field(default=5.0, alias="RETRIEVAL_TIMEOUT_SECONDS")
     explain_timeout_seconds: float = Field(default=5.0, alias="EXPLAIN_TIMEOUT_SECONDS")
     statement_timeout_seconds: float = Field(default=10.0, alias="STATEMENT_TIMEOUT_SECONDS")
+    semantic_layer_enabled: bool = Field(default=True, alias="SEMANTIC_LAYER_ENABLED")
+    semantic_layer_path: str = Field(default="semantic/metrics.yaml", alias="SEMANTIC_LAYER_PATH")
 
     api_host: str = Field(default="0.0.0.0", alias="API_HOST")
     api_port: int = Field(default=8000, alias="API_PORT")

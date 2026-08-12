@@ -113,6 +113,10 @@ def combined_source_fingerprint(schema: dict[str, Any], examples: list[dict[str,
     )[:16]
 
 
+def semantic_source_fingerprint(payload: Any) -> str:
+    return stable_hash(payload)[:16]
+
+
 def hashed_embedding(tokens: tuple[str, ...], dimensions: int = VECTOR_DIMENSIONS) -> tuple[float, ...]:
     values = [0.0] * dimensions
     if not tokens:
@@ -180,6 +184,41 @@ def example_documents(examples: list[dict[str, Any]]) -> list[ContextDocument]:
                 tokens=tokens,
                 embedding=hashed_embedding(tokens),
                 payload=example,
+            )
+        )
+    return docs
+
+
+def semantic_documents(definition: Any) -> list[ContextDocument]:
+    docs: list[ContextDocument] = []
+    for metric in getattr(definition, "metrics", []):
+        dimensions = ", ".join(metric.allowed_dimensions)
+        filters = ", ".join(metric.allowed_filters)
+        text = (
+            f"Metric {metric.id} version {metric.version}. {metric.description}. "
+            f"Synonyms: {', '.join(metric.synonyms)}. "
+            f"Source: {metric.source}. Expression: {metric.expression}. "
+            f"Allowed dimensions: {dimensions or 'none'}. Filters: {filters or 'none'}."
+        )
+        tokens = tokenize(text)
+        docs.append(
+            ContextDocument(
+                doc_id=f"semantic:metric:{metric.id}",
+                kind="semantic",
+                source_id=metric.id,
+                text=text,
+                tokens=tokens,
+                embedding=hashed_embedding(tokens),
+                table_name=metric.source,
+                payload={
+                    "kind": "metric",
+                    "id": metric.id,
+                    "version": metric.version,
+                    "owner": metric.owner,
+                    "sensitivity": metric.sensitivity,
+                    "allowed_dimensions": list(metric.allowed_dimensions),
+                    "allowed_filters": list(metric.allowed_filters),
+                },
             )
         )
     return docs

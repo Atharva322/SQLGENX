@@ -15,8 +15,11 @@ from src.context.documents import (
     foreign_key_edges,
     hashed_embedding,
     schema_documents,
+    semantic_documents,
+    semantic_source_fingerprint,
     tokenize,
 )
+from src.semantic.loader import load_semantic_layer_cached
 from src.context.fusion import reciprocal_rank_fusion
 
 
@@ -33,6 +36,7 @@ class ContextIndexStatus:
     document_count: int = 0
     schema_document_count: int = 0
     example_document_count: int = 0
+    semantic_document_count: int = 0
     created_at: str | None = None
     stale: bool = True
 
@@ -71,9 +75,10 @@ class ContextIndex:
         schema: dict[str, Any],
         feedback_examples: list[dict[str, Any]],
     ) -> ContextIndexStatus:
-        docs = schema_documents(schema) + example_documents(feedback_examples)
+        semantic_docs, semantic_fingerprint = self._semantic_documents()
+        docs = schema_documents(schema) + example_documents(feedback_examples) + semantic_docs
         edges = foreign_key_edges(schema)
-        source_fingerprint = combined_source_fingerprint(schema, feedback_examples)
+        source_fingerprint = self._source_fingerprint(schema, feedback_examples, semantic_fingerprint)
         version_id = uuid.uuid4().hex
         created_at = datetime.now(UTC).isoformat()
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -245,7 +250,8 @@ class ContextIndex:
     ) -> ContextIndexStatus:
         source_fingerprint = None
         if schema is not None and feedback_examples is not None:
-            source_fingerprint = combined_source_fingerprint(schema, feedback_examples)
+            _, semantic_fingerprint = self._semantic_documents()
+            source_fingerprint = self._source_fingerprint(schema, feedback_examples, semantic_fingerprint)
         if not self.path.exists():
             return ContextIndexStatus(False, False, connection_id, schema_fingerprint, source_fingerprint)
         conn = self._connect()
@@ -265,6 +271,7 @@ class ContextIndex:
                 document_count=counts["total"],
                 schema_document_count=counts["schema"],
                 example_document_count=counts["example"],
+                semantic_document_count=counts["semantic"],
                 created_at=version["created_at"],
                 stale=stale,
             )
@@ -396,11 +403,29 @@ class ContextIndex:
             "SELECT kind, COUNT(*) AS count FROM context_documents WHERE version_id=? GROUP BY kind",
             (version_id,),
         ).fetchall()
-        counts = {"schema": 0, "example": 0}
+        counts = {"schema": 0, "example": 0, "semantic": 0}
         for row in rows:
             counts[str(row["kind"])] = int(row["count"])
-        counts["total"] = counts["schema"] + counts["example"]
+        counts["total"] = counts["schema"] + counts["example"] + counts["semantic"]
         return counts
+
+    def _semantic_documents(self) -> tuple[list[ContextDocument], str]:
+        try:
+            definition = load_semantic_layer_cached()
+        except Exception:
+            return [], "none"
+        payload = definition.model_dump(mode="json")
+        return semantic_documents(definition), semantic_source_fingerprint(payload)
+
+    def _source_fingerprint(
+        self, schema: dict[str, Any], feedback_examples: list[dict[str, Any]], semantic_fingerprint: str
+    ) -> str:
+        return semantic_source_fingerprint(
+            {
+                "schema_examples": combined_source_fingerprint(schema, feedback_examples),
+                "semantic": semantic_fingerprint,
+            }
+        )
 
     def _load_documents(self, conn: sqlite3.Connection, version_id: str) -> list[ContextDocument]:
         rows = conn.execute(
