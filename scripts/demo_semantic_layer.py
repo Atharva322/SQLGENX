@@ -59,9 +59,11 @@ def main() -> int:
     _configure_defaults()
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+    from loguru import logger
     from src.config.settings import get_settings
     from src.services.query_service import QueryService
 
+    logger.remove()
     get_settings.cache_clear()
     service = QueryService()
     questions = args.questions or DEFAULT_QUESTIONS
