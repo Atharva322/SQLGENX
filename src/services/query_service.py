@@ -52,6 +52,7 @@ from src.validation.risk_classifier import (
 from src.validation.sanity import analyze_result_sanity
 from src.validation.ast_sql import analyze_sql_ast
 from src.validation.sql_constraints import validate_sql_identifiers
+from src.runtime.async_runtime import AsyncRuntimeConfig, get_query_runtime
 
 
 class QueryService:
@@ -76,6 +77,48 @@ class QueryService:
 
     def get_connections(self) -> dict[str, str]:
         return available_connections()
+
+    def _async_runtime_config(self) -> AsyncRuntimeConfig:
+        return AsyncRuntimeConfig(
+            max_workers=max(1, int(getattr(self.settings, "async_query_max_workers", 4))),
+            queue_limit=max(0, int(getattr(self.settings, "async_query_queue_limit", 8))),
+            queue_timeout_seconds=float(
+                getattr(self.settings, "async_query_queue_timeout_seconds", 0.25)
+            ),
+            request_timeout_seconds=float(
+                getattr(self.settings, "async_query_total_timeout_seconds", 30.0)
+            ),
+            overload_retry_after_seconds=int(
+                getattr(self.settings, "async_query_retry_after_seconds", 2)
+            ),
+        )
+
+    async def process_question_async(
+        self,
+        question: str,
+        connection_id: str | None = None,
+        session_id: str | None = None,
+        row_limit_override: int | None = None,
+        sql_override: str | None = None,
+    ) -> QueryResponse:
+        if not bool(getattr(self.settings, "async_runtime_enabled", True)):
+            return self.process_question(
+                question,
+                connection_id=connection_id,
+                session_id=session_id,
+                row_limit_override=row_limit_override,
+                sql_override=sql_override,
+            )
+        runtime = get_query_runtime(self._async_runtime_config())
+        return await runtime.run_blocking(
+            self.process_question,
+            question,
+            connection_id=connection_id,
+            session_id=session_id,
+            row_limit_override=row_limit_override,
+            sql_override=sql_override,
+            stage="total_request",
+        )
 
     def _sum_token_usage(self, usages: list[dict[str, Any]]) -> dict[str, Any]:
         total_prompt = 0

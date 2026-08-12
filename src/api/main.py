@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException, Query
 
 from src.db.engine import connections_health
@@ -13,9 +15,19 @@ from src.models.schemas import (
     SchemaResponse,
 )
 from src.services.query_service import QueryService
+from src.runtime.async_runtime import AsyncRuntimeOverloaded, AsyncRuntimeTimeout, close_query_runtime
 
-app = FastAPI(title="Text-to-SQL with Guardrails", version="0.2.0")
 service = QueryService()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    await close_query_runtime()
+    service.llm.close()
+
+
+app = FastAPI(title="Text-to-SQL with Guardrails", version="0.2.0", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -24,15 +36,38 @@ def health() -> dict[str, str]:
 
 
 @app.post("/v1/query", response_model=QueryResponse)
-def query(payload: QueryRequest) -> QueryResponse:
+async def query(payload: QueryRequest) -> QueryResponse:
     row_limit = payload.options.row_limit if payload.options else None
-    return service.process_question(
-        payload.question,
-        connection_id=payload.connection_id,
-        session_id=payload.session_id,
-        row_limit_override=row_limit,
-        sql_override=payload.sql_override,
-    )
+    try:
+        return await service.process_question_async(
+            payload.question,
+            connection_id=payload.connection_id,
+            session_id=payload.session_id,
+            row_limit_override=row_limit,
+            sql_override=payload.sql_override,
+        )
+    except AsyncRuntimeOverloaded as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "query_runtime_overloaded",
+                "message": "Query capacity is temporarily exhausted.",
+                "retry_after_seconds": exc.retry_after_seconds,
+                "queue_depth": exc.queue_depth,
+                "capacity": exc.capacity,
+            },
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        ) from exc
+    except AsyncRuntimeTimeout as exc:
+        raise HTTPException(
+            status_code=504,
+            detail={
+                "error": "query_runtime_timeout",
+                "message": "Query timed out before completion.",
+                "timeout_stage": exc.stage,
+                "timeout_seconds": exc.timeout_seconds,
+            },
+        ) from exc
 
 
 @app.get("/v1/schema", response_model=SchemaResponse)
@@ -67,3 +102,4 @@ def connections() -> ConnectionsResponse:
 @app.get("/v1/connections/health", response_model=ConnectionsHealthResponse)
 def connections_healthcheck() -> ConnectionsHealthResponse:
     return ConnectionsHealthResponse(connections=connections_health())
+
