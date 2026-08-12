@@ -13,6 +13,7 @@ export interface ReferencedSchema {
 
 export interface GenerateSqlResponse {
   queryId: string;
+  connectionId: string;
   conversationId: string;
   generatedSql: string;
   explanation: string;
@@ -27,6 +28,7 @@ export interface GenerateSqlResponse {
 
 export interface ExecuteSqlRequest {
   queryId: string;
+  connectionId: string;
   sql: string;
 }
 
@@ -55,8 +57,52 @@ export interface SchemaContext {
   tables: SchemaTable[];
 }
 
+export interface PublicConnection {
+  id: string;
+  displayName: string;
+  adapterKey: string;
+  dialect: string;
+  host?: string | null;
+  port?: number | null;
+  database?: string | null;
+  username?: string | null;
+  tlsMode?: string | null;
+  verificationState: string;
+  healthState: string;
+  schemaFingerprint?: string | null;
+  safeErrorCode?: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdapterCatalogItem {
+  key: string;
+  displayName: string;
+  releaseState: "hidden" | "experimental" | "verified";
+  defaultPort?: number | null;
+  capabilities: Record<string, unknown>;
+}
+
+export interface PostgresConnectionConfig {
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  password: string;
+  tlsMode: "disable" | "prefer" | "require" | "verify-ca" | "verify-full";
+}
+
+export interface ConnectionTestResult {
+  ok: boolean;
+  safeErrorCode?: string | null;
+  schemaFingerprint?: string | null;
+}
+
 export interface HistoryEntry {
   queryId: string;
+  connectionId: string;
+  connectionVersion?: number;
   conversationId: string;
   userId: string;
   question: string;
