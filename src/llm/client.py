@@ -492,12 +492,18 @@ class LLMClient:
 
     def _get_openai_client(self) -> OpenAI:
         if self._openai_client is None:
-            self._openai_client = OpenAI(api_key=self.settings.openai_api_key)
+            self._openai_client = OpenAI(
+                api_key=self.settings.openai_api_key,
+                timeout=float(getattr(self.settings, "provider_timeout_seconds", 20.0)),
+            )
         return self._openai_client
 
     def _get_anthropic_client(self) -> Anthropic:
         if self._anthropic_client is None:
-            self._anthropic_client = Anthropic(api_key=self.settings.anthropic_api_key)
+            self._anthropic_client = Anthropic(
+                api_key=self.settings.anthropic_api_key,
+                timeout=float(getattr(self.settings, "provider_timeout_seconds", 20.0)),
+            )
         return self._anthropic_client
 
     def close(self) -> None:

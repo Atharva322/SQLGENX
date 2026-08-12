@@ -213,12 +213,22 @@ class QueryService:
         SessionLocal = get_session_factory(connection_id)
         with SessionLocal() as session:
             session.execute(text("SET TRANSACTION READ ONLY"))
+            self._apply_postgres_statement_timeout(
+                session, float(getattr(self.settings, "explain_timeout_seconds", 5.0))
+            )
             plan_result = session.execute(text(f"EXPLAIN {sql}"))
             plan_lines: list[str] = []
             for row in plan_result.fetchall():
                 plan_lines.append(" | ".join(str(value) for value in row))
             session.rollback()
             return plan_lines
+
+    def _apply_postgres_statement_timeout(self, session, timeout_seconds: float) -> None:
+        timeout_ms = max(1, int(timeout_seconds * 1000))
+        session.execute(
+            text("SELECT set_config('statement_timeout', :timeout_ms, true)"),
+            {"timeout_ms": f"{timeout_ms}ms"},
+        )
 
     def _execute_read_only(
         self,
@@ -238,10 +248,16 @@ class QueryService:
                 session.execute(text("SET TRANSACTION READ ONLY"))
 
                 if not explain_plan:
+                    self._apply_postgres_statement_timeout(
+                        session, float(getattr(self.settings, "explain_timeout_seconds", 5.0))
+                    )
                     plan_result = session.execute(text(f"EXPLAIN {sql}"))
                     for row in plan_result.fetchall():
                         explain_plan.append(" | ".join(str(value) for value in row))
 
+                self._apply_postgres_statement_timeout(
+                    session, float(getattr(self.settings, "statement_timeout_seconds", 10.0))
+                )
                 result = session.execute(text(sql))
                 fetched_rows = result.fetchall()
                 keys = list(result.keys())

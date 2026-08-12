@@ -77,6 +77,39 @@ async def test_runtime_timeout_path_releases_capacity() -> None:
 
 
 @pytest.mark.asyncio
+async def test_runtime_cancellation_releases_capacity() -> None:
+    runtime = BoundedAsyncRuntime(
+        AsyncRuntimeConfig(
+            max_workers=2,
+            queue_limit=0,
+            request_timeout_seconds=1,
+        )
+    )
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking() -> str:
+        started.set()
+        release.wait(timeout=1)
+        return "cancelled-work-finished"
+
+    try:
+        task = asyncio.create_task(runtime.run_blocking(blocking))
+        for _ in range(100):
+            if started.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert started.is_set()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert await runtime.run_blocking(lambda: "after-cancel") == "after-cancel"
+    finally:
+        release.set()
+        await runtime.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_runtime_shutdown_rejects_new_work() -> None:
     runtime = BoundedAsyncRuntime(AsyncRuntimeConfig(max_workers=1, queue_limit=0))
     await runtime.shutdown()
