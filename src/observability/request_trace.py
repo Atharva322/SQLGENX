@@ -28,6 +28,7 @@ CANONICAL_STAGES = {
     "candidate_validation_ms",
     "intent_guardrail_ms",
     "sql_guardrail_ms",
+    "ast_validation_ms",
     "explain_ms",
     "query_execution_ms",
     "alignment_validation_ms",

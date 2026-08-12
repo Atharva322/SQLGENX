@@ -28,6 +28,8 @@ def _service_with_settings(monkeypatch, settings_overrides=None) -> QueryService
         intermediate_trace_logging_enabled=False,
         adaptive_validation_enabled=False,
         adaptive_validation_mode="shadow",
+        ast_validation_enabled=False,
+        ast_allow_select_star=True,
         risk_fast_max_score=0.34,
         risk_standard_max_score=0.67,
         risk_low_link_confidence=0.55,
@@ -316,6 +318,7 @@ def test_adaptive_fast_level_skips_alignment_llm(monkeypatch) -> None:
         {
             "adaptive_validation_enabled": True,
             "adaptive_validation_mode": "adaptive",
+            "ast_validation_enabled": True,
             "enable_multi_query_validation": True,
         },
     )
@@ -411,5 +414,100 @@ def test_adaptive_fast_level_skips_alignment_llm(monkeypatch) -> None:
     assert response.execution_meta.validation_mode == "adaptive"
     assert response.execution_meta.validation_level == "fast"
     assert response.execution_meta.proposed_validation_level == "fast"
+    assert response.execution_meta.ast_valid is True
+    assert response.execution_meta.ast_fingerprint
     assert response.execution_meta.validation_reason_codes
     assert calls == {"back_translate": 0, "alternative": 0}
+
+
+def test_ast_validation_blocks_unknown_column_before_execution(monkeypatch) -> None:
+    service = _service_with_settings(
+        monkeypatch,
+        {
+            "ast_validation_enabled": True,
+            "constrained_sql_enabled": False,
+        },
+    )
+    schema = {
+        "schema_fingerprint": "fp",
+        "tables": [
+            {
+                "table": "sales",
+                "columns": [{"name": "amount", "type": "INTEGER", "nullable": False}],
+                "foreign_keys": [],
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        "src.services.query_service.get_schema_summary",
+        lambda connection_id=None: schema,
+    )
+    monkeypatch.setattr(
+        "src.services.query_service.select_relevant_feedback_examples",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        "src.services.query_service.run_schema_linking",
+        lambda **kwargs: SimpleNamespace(
+            context=LinkingContext(
+                normalized_question="show bonus",
+                schema_fingerprint="fp",
+                resolved=ResolvedIdentifierSet(
+                    tables=["sales"],
+                    columns=["sales.amount"],
+                    join_hints=["sales"],
+                ),
+                confidence=0.95,
+                retrieval_meta={"schema_avg_score": 0.95, "schema_margin": 0.5},
+            ),
+            selected_schema_tables=schema["tables"],
+            selected_examples=[],
+        ),
+    )
+    monkeypatch.setattr("src.services.query_service.build_prompt", lambda *args, **kwargs: "prompt")
+    monkeypatch.setattr(
+        service.llm,
+        "generate_query_plan",
+        lambda *args, **kwargs: SimpleNamespace(
+            plan=QueryPlanDraft(
+                target_tables=["sales"],
+                target_columns=["sales.amount"],
+                join_path=["sales"],
+            ),
+            confidence=0.9,
+            token_usage={},
+        ),
+    )
+    monkeypatch.setattr(
+        service.llm,
+        "generate_structured_sql",
+        lambda *args, **kwargs: GeneratedSQL(
+            sql="SELECT bonus FROM sales",
+            explanation="bad column",
+            accessed_tables=["sales"],
+            accessed_columns=["sales.bonus"],
+            model_confidence=0.9,
+            token_usage={},
+        ),
+    )
+    executed = {"explain": 0, "query": 0}
+
+    def fail_explain(*args, **kwargs):
+        executed["explain"] += 1
+        raise AssertionError("AST validation should block before EXPLAIN")
+
+    def fail_execute(*args, **kwargs):
+        executed["query"] += 1
+        raise AssertionError("AST validation should block before execution")
+
+    monkeypatch.setattr(service, "_run_explain", fail_explain)
+    monkeypatch.setattr(service, "_execute_read_only", fail_execute)
+
+    response = service.process_question("Show bonus")
+
+    assert response.sql == "UNANSWERABLE"
+    assert response.constraint_meta.violation_type == "ast_validation"
+    assert response.execution_meta.ast_valid is False
+    assert "unknown_column:bonus" in response.execution_meta.ast_reason_codes
+    assert response.execution_meta.query_execution_count == 0
+    assert executed == {"explain": 0, "query": 0}

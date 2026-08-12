@@ -90,6 +90,8 @@ class Settings(BaseSettings):
     risk_low_model_confidence: float = Field(default=0.55, alias="RISK_LOW_MODEL_CONFIDENCE")
     risk_low_retrieval_margin: float = Field(default=0.08, alias="RISK_LOW_RETRIEVAL_MARGIN")
     risk_high_scan_rows: int = Field(default=100_000, alias="RISK_HIGH_SCAN_ROWS")
+    ast_validation_enabled: bool = Field(default=True, alias="AST_VALIDATION_ENABLED")
+    ast_allow_select_star: bool = Field(default=True, alias="AST_ALLOW_SELECT_STAR")
 
     api_host: str = Field(default="0.0.0.0", alias="API_HOST")
     api_port: int = Field(default=8000, alias="API_PORT")
