@@ -45,6 +45,14 @@ def _settings() -> SimpleNamespace:
         schema_cache_max_entries=32,
         prompt_asset_cache_enabled=True,
         prompt_asset_cache_max_entries=32,
+        adaptive_validation_enabled=False,
+        adaptive_validation_mode="shadow",
+        risk_fast_max_score=0.34,
+        risk_standard_max_score=0.67,
+        risk_low_link_confidence=0.55,
+        risk_low_model_confidence=0.55,
+        risk_low_retrieval_margin=0.08,
+        risk_high_scan_rows=100000,
     )
 
 
@@ -142,7 +150,7 @@ def test_query_request_loads_schema_once_and_reuses_backtranslation(monkeypatch)
 
     assert response.sql.startswith("SELECT region")
     assert calls["schema"] == 1
-    assert calls["alternative"] == 1
+    assert calls["alternative"] == 0
     assert calls["back_translate"] == 1
 
 

@@ -82,6 +82,14 @@ class Settings(BaseSettings):
         default="schema-doc-v1", alias="CONTEXT_INDEX_CHUNKING_VERSION"
     )
     context_index_rrf_k: int = Field(default=60, alias="CONTEXT_INDEX_RRF_K")
+    adaptive_validation_enabled: bool = Field(default=False, alias="ADAPTIVE_VALIDATION_ENABLED")
+    adaptive_validation_mode: str = Field(default="shadow", alias="ADAPTIVE_VALIDATION_MODE")
+    risk_fast_max_score: float = Field(default=0.34, alias="RISK_FAST_MAX_SCORE")
+    risk_standard_max_score: float = Field(default=0.67, alias="RISK_STANDARD_MAX_SCORE")
+    risk_low_link_confidence: float = Field(default=0.55, alias="RISK_LOW_LINK_CONFIDENCE")
+    risk_low_model_confidence: float = Field(default=0.55, alias="RISK_LOW_MODEL_CONFIDENCE")
+    risk_low_retrieval_margin: float = Field(default=0.08, alias="RISK_LOW_RETRIEVAL_MARGIN")
+    risk_high_scan_rows: int = Field(default=100_000, alias="RISK_HIGH_SCAN_ROWS")
 
     api_host: str = Field(default="0.0.0.0", alias="API_HOST")
     api_port: int = Field(default=8000, alias="API_PORT")

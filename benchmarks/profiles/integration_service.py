@@ -30,6 +30,11 @@ def _sample_from_response(case: dict[str, Any], latency_ms: float, response: Any
         "query_execution_count": meta.query_execution_count,
         "unsafe_queries_executed": unsafe_executed,
         "trace_coverage_ratio": meta.trace_coverage_ratio,
+        "validation_level": meta.validation_level,
+        "proposed_validation_level": meta.proposed_validation_level,
+        "validation_mode": meta.validation_mode,
+        "validation_reason_codes": list(meta.validation_reason_codes),
+        "risk_score": meta.risk_score,
         "stage_durations_ms": meta.stage_durations_ms,
     }
 

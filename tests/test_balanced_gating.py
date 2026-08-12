@@ -26,6 +26,14 @@ def _service_with_settings(monkeypatch, settings_overrides=None) -> QueryService
         multi_query_complexity_threshold=2,
         multi_query_easy_skip_enabled=True,
         intermediate_trace_logging_enabled=False,
+        adaptive_validation_enabled=False,
+        adaptive_validation_mode="shadow",
+        risk_fast_max_score=0.34,
+        risk_standard_max_score=0.67,
+        risk_low_link_confidence=0.55,
+        risk_low_model_confidence=0.55,
+        risk_low_retrieval_margin=0.08,
+        risk_high_scan_rows=100000,
     )
     if settings_overrides:
         for key, value in settings_overrides.items():
@@ -163,7 +171,7 @@ def test_medium_confidence_partial_resolution_still_generates(monkeypatch) -> No
     monkeypatch.setattr(service.llm, "back_translate_sql", lambda *args, **kwargs: "show revenue by region")
     response = service.process_question("Show revenue by region")
     assert called["primary"] == 1
-    assert response.reasoning.strategy == "primary_only_easy_path"
+    assert response.reasoning.strategy == "primary_then_adaptive_validation"
     assert response.sql != "UNANSWERABLE"
 
 
@@ -300,3 +308,108 @@ def test_query_plan_stage_populates_reasoning(monkeypatch) -> None:
     monkeypatch.setattr(service.llm, "back_translate_sql", lambda *args, **kwargs: "show total sales by region")
     response = service.process_question("Show total sales by region")
     assert response.reasoning.query_plan["target_tables"] == ["sales"]
+
+
+def test_adaptive_fast_level_skips_alignment_llm(monkeypatch) -> None:
+    service = _service_with_settings(
+        monkeypatch,
+        {
+            "adaptive_validation_enabled": True,
+            "adaptive_validation_mode": "adaptive",
+            "enable_multi_query_validation": True,
+        },
+    )
+    monkeypatch.setattr(
+        "src.services.query_service.get_schema_summary",
+        lambda connection_id=None: {
+            "schema_fingerprint": "fp",
+            "tables": [
+                {
+                    "table": "sales",
+                    "columns": [{"name": "amount", "type": "INTEGER", "nullable": False}],
+                    "foreign_keys": [],
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        "src.services.query_service.select_relevant_feedback_examples",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        "src.services.query_service.run_schema_linking",
+        lambda **kwargs: SimpleNamespace(
+            context=LinkingContext(
+                normalized_question="show sales",
+                schema_fingerprint="fp",
+                resolved=ResolvedIdentifierSet(
+                    tables=["sales"],
+                    columns=["sales.amount"],
+                    join_hints=["sales"],
+                ),
+                confidence=0.95,
+                retrieval_meta={"schema_avg_score": 0.95, "schema_margin": 0.5},
+            ),
+            selected_schema_tables=kwargs["schema"]["tables"],
+            selected_examples=[],
+        ),
+    )
+    monkeypatch.setattr("src.services.query_service.build_prompt", lambda *args, **kwargs: "prompt")
+    monkeypatch.setattr(
+        service.llm,
+        "generate_query_plan",
+        lambda *args, **kwargs: SimpleNamespace(
+            plan=QueryPlanDraft(
+                target_tables=["sales"],
+                target_columns=["sales.amount"],
+                join_path=["sales"],
+            ),
+            confidence=0.9,
+            token_usage={},
+        ),
+    )
+    monkeypatch.setattr(
+        service.llm,
+        "generate_structured_sql",
+        lambda *args, **kwargs: GeneratedSQL(
+            sql="SELECT amount FROM sales",
+            explanation="ok",
+            accessed_tables=["sales"],
+            accessed_columns=["sales.amount"],
+            model_confidence=0.9,
+            token_usage={},
+        ),
+    )
+    calls = {"back_translate": 0, "alternative": 0}
+
+    def back_translate(*args, **kwargs):
+        calls["back_translate"] += 1
+        return "show sales"
+
+    def alternative(*args, **kwargs):
+        calls["alternative"] += 1
+        return GeneratedSQL(
+            sql="SELECT amount FROM sales",
+            explanation="alt",
+            accessed_tables=["sales"],
+            accessed_columns=["sales.amount"],
+            model_confidence=0.9,
+            token_usage={},
+        )
+
+    monkeypatch.setattr(service.llm, "back_translate_sql", back_translate)
+    monkeypatch.setattr(service.llm, "generate_alternative_sql", alternative)
+    monkeypatch.setattr(service, "_run_explain", lambda *args, **kwargs: ["rows=10"])
+    monkeypatch.setattr(
+        service,
+        "_execute_read_only",
+        lambda *args, **kwargs: ([{"amount": 1}], ["rows=10"], 2),
+    )
+
+    response = service.process_question("Show sales")
+
+    assert response.execution_meta.validation_mode == "adaptive"
+    assert response.execution_meta.validation_level == "fast"
+    assert response.execution_meta.proposed_validation_level == "fast"
+    assert response.execution_meta.validation_reason_codes
+    assert calls == {"back_translate": 0, "alternative": 0}

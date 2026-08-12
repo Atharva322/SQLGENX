@@ -7,6 +7,7 @@ from datetime import date, datetime
 import math
 import re
 import argparse
+from collections import defaultdict
 
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -218,6 +219,11 @@ def run_eval_suite(
         "blocked": 0,
         "execution_error": 0,
     }
+    validation_level_counts: dict[str, int] = defaultdict(int)
+    proposed_validation_level_counts: dict[str, int] = defaultdict(int)
+    validation_quality: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"cases": 0, "success": 0, "hallucination_hits": 0, "hallucination_cases": 0}
+    )
 
     schema = get_schema_summary(connection_id="default")
     schema_tables = schema.get("tables", [])
@@ -272,6 +278,13 @@ def run_eval_suite(
             or "destructive" in warnings
         )
         execution_meta = response.get("execution_meta", {})
+        actual_validation_level = str(execution_meta.get("validation_level", "unknown"))
+        proposed_validation_level = str(
+            execution_meta.get("proposed_validation_level", "unknown")
+        )
+        validation_level_counts[actual_validation_level] += 1
+        proposed_validation_level_counts[proposed_validation_level] += 1
+        validation_quality[actual_validation_level]["cases"] += 1
         stage_latencies = execution_meta.get("stage_latencies_ms", {})
         total_pipeline_ms = int(stage_latencies.get("total_pipeline_ms", 0) or 0)
         if total_pipeline_ms > 0:
@@ -315,19 +328,24 @@ def run_eval_suite(
         if expected_sql == "BLOCKED":
             if blocked:
                 success_cases += 1
+                validation_quality[actual_validation_level]["success"] += 1
         elif expected_sql == "UNANSWERABLE":
             if generated_sql.strip().upper() == "UNANSWERABLE":
                 success_cases += 1
+                validation_quality[actual_validation_level]["success"] += 1
         else:
             if not blocked and not any("error" in row for row in response.get("results", [])):
                 success_cases += 1
+                validation_quality[actual_validation_level]["success"] += 1
 
         if case.get("expect_hallucination_flag") is not None:
             hallucination_eval_cases += 1
+            validation_quality[actual_validation_level]["hallucination_cases"] += 1
             flagged = _is_flagged_hallucination(response)
             expected_flag = bool(case["expect_hallucination_flag"])
             if expected_flag == flagged:
                 hallucination_hits += 1
+                validation_quality[actual_validation_level]["hallucination_hits"] += 1
             else:
                 if flagged and not expected_flag:
                     hallucination_false_positive += 1
@@ -389,6 +407,17 @@ def run_eval_suite(
         output_buckets["unanswerable"] / max(1, scored_accuracy_cases),
         3,
     )
+    validation_quality_summary = {
+        level: {
+            "cases": values["cases"],
+            "success_rate": round(values["success"] / max(1, values["cases"]), 3),
+            "hallucination_detection_rate": round(
+                values["hallucination_hits"] / max(1, values["hallucination_cases"]), 3
+            ),
+            "hallucination_cases": values["hallucination_cases"],
+        }
+        for level, values in validation_quality.items()
+    }
 
     return {
         "total_cases": total,
@@ -422,6 +451,9 @@ def run_eval_suite(
         "post_generation_constraint_unanswerable_cases": post_generation_constraint_unanswerable_cases,
         "answerable_unanswerable_rate": answerable_unanswerable_rate,
         "output_buckets": output_buckets,
+        "validation_level_counts": dict(validation_level_counts),
+        "proposed_validation_level_counts": dict(proposed_validation_level_counts),
+        "validation_quality_by_level": validation_quality_summary,
         "retrieval_context_available": retrieval_context_available,
         "retrieval_only_mode": retrieval_only,
         "limited_cases": limit or total,
