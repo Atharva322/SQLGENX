@@ -13,6 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from src.config.settings import get_settings
 from src.connections.models import ConnectionNotFoundError, PublicConnection
 from src.connections.repository import LegacyEnvConnectionRepository
+from src.connections.service import DEMO_OWNER_ID
 from src.db.engine import available_connections, get_session_factory
 from src.db.schema_introspector import compute_schema_fingerprint, get_schema_summary
 from src.guardrails.rules import (
@@ -73,8 +74,11 @@ class QueryService:
             return session_id.strip()
         return "default"
 
-    def _normalize_connection_id(self, connection_id: str | None) -> str:
-        connections = available_connections()
+    def _normalize_connection_id(self, connection_id: str | None, owner_id: str | None = None) -> str:
+        try:
+            connections = available_connections(owner_id=owner_id or DEMO_OWNER_ID)
+        except TypeError:
+            connections = available_connections()
         cid = connection_id or "default"
         if cid not in connections:
             raise ConnectionNotFoundError(f"Connection '{cid}' was not found.")
@@ -105,6 +109,7 @@ class QueryService:
         session_id: str | None = None,
         row_limit_override: int | None = None,
         sql_override: str | None = None,
+        owner_id: str | None = None,
     ) -> QueryResponse:
         if not bool(getattr(self.settings, "async_runtime_enabled", True)):
             return self.process_question(
@@ -113,6 +118,7 @@ class QueryService:
                 session_id=session_id,
                 row_limit_override=row_limit_override,
                 sql_override=sql_override,
+                owner_id=owner_id,
             )
         runtime = get_query_runtime(self._async_runtime_config())
         return await runtime.run_blocking(
@@ -122,6 +128,7 @@ class QueryService:
             session_id=session_id,
             row_limit_override=row_limit_override,
             sql_override=sql_override,
+            owner_id=owner_id,
             stage="total_request",
         )
 
@@ -213,9 +220,9 @@ class QueryService:
         return "none"
 
     def _run_explain(
-        self, sql: str, connection_id: str, trace: RequestTrace | None = None
+        self, sql: str, connection_id: str, trace: RequestTrace | None = None, owner_id: str | None = None
     ) -> list[str]:
-        SessionLocal = get_session_factory(connection_id)
+        SessionLocal = get_session_factory(connection_id, owner_id=owner_id or DEMO_OWNER_ID)
         with SessionLocal() as session:
             session.execute(text("SET TRANSACTION READ ONLY"))
             self._apply_postgres_statement_timeout(
@@ -242,11 +249,12 @@ class QueryService:
         connection_id: str,
         precomputed_explain: list[str] | None = None,
         trace: RequestTrace | None = None,
+        owner_id: str | None = None,
     ) -> tuple[list[dict], list[str], int]:
         start = perf_counter()
         explain_plan: list[str] = precomputed_explain or []
         rows_df = pd.DataFrame()
-        SessionLocal = get_session_factory(connection_id)
+        SessionLocal = get_session_factory(connection_id, owner_id=owner_id or DEMO_OWNER_ID)
 
         try:
             with SessionLocal() as session:
@@ -285,8 +293,13 @@ class QueryService:
         accessed_columns: list[str],
         connection_id: str,
         schema: dict | None = None,
+        owner_id: str | None = None,
     ) -> float:
-        schema = schema or get_schema_summary(connection_id=connection_id)
+        if schema is None:
+            try:
+                schema = get_schema_summary(connection_id=connection_id, owner_id=owner_id or DEMO_OWNER_ID)
+            except TypeError:
+                schema = get_schema_summary(connection_id=connection_id)
         question_tokens = {token.lower() for token in question.split() if len(token) > 2}
         expected: set[str] = set()
         for table in schema.get("tables", []):
@@ -473,6 +486,7 @@ class QueryService:
         prompt_context: str | None = None,
         agreement_candidate: GeneratedSQL | None = None,
         trace: RequestTrace | None = None,
+        owner_id: str | None = None,
     ) -> QueryResponse:
         prompt = prompt_context or (request_context.prompt_for_validation() if request_context else "")
         validation_level = trace.validation_level if trace else "strict"
@@ -558,6 +572,7 @@ class QueryService:
                     max_rows=self.settings.max_result_rows,
                     connection_id=connection_id,
                     trace=trace,
+                    owner_id=owner_id or DEMO_OWNER_ID,
                 )
                 multi_query = evaluate_multi_query_agreement(rows, alt_rows)
                 multi_query_score = multi_query.score
@@ -582,6 +597,7 @@ class QueryService:
                 accessed_columns=generated.accessed_columns,
                 connection_id=connection_id,
                 schema=request_context.schema if request_context else None,
+                owner_id=owner_id or DEMO_OWNER_ID,
             )
 
         signals = ConfidenceSignals(
@@ -710,10 +726,12 @@ class QueryService:
         session_id: str | None = None,
         row_limit_override: int | None = None,
         sql_override: str | None = None,
+        owner_id: str | None = None,
     ) -> QueryResponse:
+        resolved_owner_id = owner_id or DEMO_OWNER_ID
         max_rows = row_limit_override or self.settings.max_result_rows
         resolved_session_id = self._normalize_session_id(session_id)
-        resolved_connection_id = self._normalize_connection_id(connection_id)
+        resolved_connection_id = self._normalize_connection_id(connection_id, owner_id=resolved_owner_id)
         query_id = self._new_query_id()
         trace = RequestTrace(request_id=query_id)
         stage_latencies_ms = trace.stage_durations_ms
@@ -721,7 +739,10 @@ class QueryService:
         self.llm.observer = trace
         trace_token = set_current_trace(trace)
         with trace.timer("schema_introspection_ms"):
-            schema = get_schema_summary(connection_id=resolved_connection_id)
+            try:
+                schema = get_schema_summary(connection_id=resolved_connection_id, owner_id=resolved_owner_id)
+            except TypeError:
+                schema = get_schema_summary(connection_id=resolved_connection_id)
         schema_fingerprint = schema.get("schema_fingerprint") or compute_schema_fingerprint(schema)
         request_context = QueryContext(
             question=question,
@@ -978,6 +999,7 @@ class QueryService:
                 request_context=request_context,
                 prompt_context=request_context.prompt_for_validation(),
                 trace=trace,
+                owner_id=resolved_owner_id,
             )
             with trace.timer("history_audit_ms"):
                 self.history.append(
@@ -1050,6 +1072,7 @@ class QueryService:
                 request_context=request_context,
                 prompt_context=request_context.prompt_for_validation(),
                 trace=trace,
+                owner_id=resolved_owner_id,
             )
             with trace.timer("history_audit_ms"):
                 self.history.append(
@@ -1151,6 +1174,7 @@ class QueryService:
                         request_context=request_context,
                         prompt_context=request_context.prompt_for_validation(),
                         trace=trace,
+                        owner_id=resolved_owner_id,
                     )
                     with trace.timer("history_audit_ms"):
                         self.history.append(
@@ -1235,6 +1259,7 @@ class QueryService:
                         request_context=request_context,
                         prompt_context=request_context.prompt_for_validation(),
                         trace=trace,
+                        owner_id=resolved_owner_id,
                     )
                     with trace.timer("history_audit_ms"):
                         self.history.append(
@@ -1281,7 +1306,10 @@ class QueryService:
             try:
                 with trace.timer("explain_ms"):
                     explain = self._run_explain(
-                        guarded_sql, connection_id=resolved_connection_id, trace=trace
+                        guarded_sql,
+                        connection_id=resolved_connection_id,
+                        trace=trace,
+                        owner_id=resolved_owner_id,
                     )
                 estimated_rows = parse_explain_total_rows(explain)
             except SQLAlchemyError as exc:
@@ -1320,6 +1348,7 @@ class QueryService:
                         connection_id=resolved_connection_id,
                         precomputed_explain=explain,
                         trace=trace,
+                        owner_id=resolved_owner_id,
                     )
                 log_execution_event(
                     "query_executed",
@@ -1376,6 +1405,7 @@ class QueryService:
             prompt_context=request_context.prompt_for_validation(),
             agreement_candidate=agreement_candidate,
             trace=trace,
+            owner_id=resolved_owner_id,
         )
         with trace.timer("history_audit_ms"):
             log_execution_event(
