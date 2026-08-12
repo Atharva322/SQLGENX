@@ -287,6 +287,7 @@ def build_prompt(
             feedback_examples=scoped_feedback,
             top_k_schema=settings.rag_top_k_schema,
             top_k_examples=settings.rag_top_k_examples,
+            connection_id=connection_id,
         )
         selected_tables = rag.selected_schema_tables
         selected_examples = rag.selected_examples

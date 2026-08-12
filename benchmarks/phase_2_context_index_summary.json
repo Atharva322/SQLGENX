@@ -1,0 +1,121 @@
+{
+  "phase": "phase_2_context_index",
+  "branch": "perf/phase-2-context-index",
+  "base_phase": "phase_1_deduplicate_request_path",
+  "measurement_parent_commit": "3963c041d98f511fc1098cc1558f14f2c336e807",
+  "database_seed_fingerprint": "phase0-benchmark-v1",
+  "provider_profile": "deterministic_adapter",
+  "provider_model": "sqlgenx-fixture-v1",
+  "generated_at_local": "2026-08-11T23:58:30-07:00",
+  "context_index": {
+    "enabled_for_benchmarks": true,
+    "default_enabled_in_settings": false,
+    "storage": "sqlite",
+    "embedding_model": "deterministic-hash-v1",
+    "chunking_version": "schema-doc-v1",
+    "retrieval_lanes": [
+      "lexical",
+      "semantic_hash",
+      "token_overlap",
+      "one_hop_fk_expansion"
+    ],
+    "request_path_note": "The live request path persists stable schema context. Question-scoped examples keep the existing lexical ranking path to avoid rebuilding the index per request."
+  },
+  "sanitization": {
+    "raw_prompts_included": false,
+    "raw_sql_included": false,
+    "raw_rows_included": false,
+    "credentials_or_database_urls_included": false
+  },
+  "source_result_files": {
+    "phase2_integration_service": "benchmarks/results/phase2_v3_integration-service_full.json",
+    "phase2_integration_http_c1": "benchmarks/results/phase2_v3_integration-http-c1_full.json",
+    "phase2_integration_http_c5": "benchmarks/results/phase2_v5_integration-http-c5_solo.json",
+    "phase1_summary": "benchmarks/phase_1_deduplication_summary.json",
+    "phase0_summary": "benchmarks/phase_0_real_baseline_summary.json"
+  },
+  "comparison": [
+    {
+      "profile": "integration_service",
+      "sample_count": 1500,
+      "phase0_p50_ms": 677.637,
+      "phase1_p50_ms": 103.069,
+      "phase2_p50_ms": 95.82,
+      "phase1_to_phase2_p50_delta_pct": -7.03,
+      "phase0_p95_ms": 994.102,
+      "phase1_p95_ms": 178.175,
+      "phase2_p95_ms": 222.789,
+      "phase1_to_phase2_p95_delta_pct": 25.04,
+      "phase2_tokens": 181200,
+      "phase2_schema_introspection_count": 0,
+      "success_rate": 1.0,
+      "unsafe_queries_executed": 0,
+      "error_rate": 0.0
+    },
+    {
+      "profile": "integration_http_inprocess_concurrency_1",
+      "sample_count": 1500,
+      "phase0_p50_ms": 728.711,
+      "phase1_p50_ms": 116.531,
+      "phase2_p50_ms": 105.299,
+      "phase1_to_phase2_p50_delta_pct": -9.64,
+      "phase0_p95_ms": 1050.286,
+      "phase1_p95_ms": 209.307,
+      "phase2_p95_ms": 257.335,
+      "phase1_to_phase2_p95_delta_pct": 22.95,
+      "phase2_tokens": 181200,
+      "phase2_schema_introspection_count": 0,
+      "success_rate": 1.0,
+      "unsafe_queries_executed": 0,
+      "error_rate": 0.0
+    },
+    {
+      "profile": "integration_http_inprocess_concurrency_5",
+      "sample_count": 1500,
+      "phase0_p50_ms": 1760.632,
+      "phase1_p50_ms": 171.386,
+      "phase2_p50_ms": 151.175,
+      "phase1_to_phase2_p50_delta_pct": -11.79,
+      "phase0_p95_ms": 2636.996,
+      "phase1_p95_ms": 294.43,
+      "phase2_p95_ms": 236.573,
+      "phase1_to_phase2_p95_delta_pct": -19.65,
+      "phase2_tokens": 177540,
+      "phase2_schema_introspection_count": 0,
+      "success_rate": 1.0,
+      "unsafe_queries_executed": 0,
+      "error_rate": 0.0
+    }
+  ],
+  "warm_retrieval_gate": {
+    "profile": "direct_context_index_retrieve",
+    "samples": 1000,
+    "p50_ms": 2.532,
+    "p95_ms": 4.482,
+    "p99_ms": 18.733,
+    "max_ms": 21.964,
+    "threshold_p95_ms": 100,
+    "passed": true
+  },
+  "quality_non_regression": {
+    "full_eval_total_cases": 60,
+    "full_eval_success_rate": 1.0,
+    "hallucination_detection_rate": 0.615,
+    "guardrail_effectiveness": 1.0,
+    "unsafe_block_rate": 1.0,
+    "execution_error_count": 0,
+    "full_eval_schema_recall_at_5": 0.978,
+    "full_eval_schema_ndcg_at_5": 0.896,
+    "retrieval_only_limited_cases": 20,
+    "retrieval_only_schema_recall_at_5": 1.0,
+    "retrieval_only_schema_ndcg_at_5": 0.966
+  },
+  "acceptance_notes": [
+    "Context index defaults off to preserve existing behavior unless explicitly enabled by environment.",
+    "No credentials, raw prompts, raw SQL, or raw rows are included in this summary.",
+    "Stable schema documents are persisted and refreshed by connection id, schema fingerprint, source fingerprint, embedding model, chunking version, and retrieval config.",
+    "Question-scoped feedback examples are not used as an index invalidation key on the request path; this prevents per-request rebuilds and preserves Phase 1 behavior for examples.",
+    "Integration service and HTTP concurrency-1 p50 improved versus Phase 1, while their p95 values increased. HTTP concurrency-5 improved versus Phase 1 after measuring it without competing benchmark processes. Keep context index opt-in until a follow-up confirms tail latency across more environments."
+  ],
+  "push_recommendation": "YES"
+}
