@@ -1,0 +1,234 @@
+{
+  "phase": "phase_3_adaptive_validation",
+  "branch": "perf/phase-3-adaptive-validation",
+  "base_phase": "phase_2_context_index",
+  "measurement_parent_commit": "2ffcfa6",
+  "database_seed_fingerprint": "phase0-benchmark-v1",
+  "provider_profile": "deterministic_adapter",
+  "provider_model": "sqlgenx-fixture-v1",
+  "generated_at_local": "2026-08-12T08:45:00-07:00",
+  "adaptive_validation": {
+    "default_enabled_in_settings": false,
+    "default_mode": "shadow",
+    "available_modes": [
+      "shadow",
+      "adaptive",
+      "strict_only"
+    ],
+    "classifier_version": "risk-adaptive-v1",
+    "safety_note": "Deterministic intent guardrails, SQL guardrails, identifier constraints, EXPLAIN, read-only transaction execution, and sanity checks remain enforced for every validation level."
+  },
+  "sanitization": {
+    "raw_prompts_included": false,
+    "raw_sql_included": false,
+    "raw_rows_included": false,
+    "credentials_or_database_urls_included": false
+  },
+  "source_result_files": {
+    "phase3_integration_service": "benchmarks/results/phase3_adaptive_integration_service_full.json",
+    "phase3_integration_http_c1": "benchmarks/results/phase3_adaptive_integration_http_c1_full.json",
+    "phase3_integration_http_c5": "benchmarks/results/phase3_adaptive_integration_http_c5_full.json",
+    "phase2_summary": "benchmarks/phase_2_context_index_summary.json",
+    "phase1_summary": "benchmarks/phase_1_deduplication_summary.json",
+    "phase0_summary": "benchmarks/phase_0_real_baseline_summary.json"
+  },
+  "shadow_eval": {
+    "actual_validation_level_counts": {
+      "strict": 60
+    },
+    "proposed_validation_level_counts": {
+      "strict": 46,
+      "standard": 7,
+      "fast": 7
+    },
+    "fast_or_standard_share": 0.233,
+    "success_rate": 1.0,
+    "hallucination_detection_rate": 0.615,
+    "guardrail_effectiveness": 1.0,
+    "unsafe_block_rate": 1.0,
+    "execution_error_count": 0,
+    "schema_recall_at_5": 0.978,
+    "schema_ndcg_at_5": 0.896
+  },
+  "adaptive_eval": {
+    "actual_validation_level_counts": {
+      "standard": 38,
+      "fast": 7,
+      "strict": 15
+    },
+    "proposed_validation_level_counts": {
+      "standard": 38,
+      "fast": 7,
+      "strict": 15
+    },
+    "fast_or_standard_share": 0.75,
+    "success_rate": 1.0,
+    "hallucination_detection_rate": 0.692,
+    "guardrail_effectiveness": 1.0,
+    "unsafe_block_rate": 1.0,
+    "false_block_rate": 0.0,
+    "execution_error_count": 0,
+    "schema_recall_at_5": 0.978,
+    "schema_ndcg_at_5": 0.896,
+    "quality_by_level": {
+      "standard": {
+        "cases": 38,
+        "success_rate": 1.0,
+        "hallucination_detection_rate": 0.636,
+        "hallucination_cases": 11
+      },
+      "fast": {
+        "cases": 7,
+        "success_rate": 1.0,
+        "hallucination_detection_rate": 1.0,
+        "hallucination_cases": 1
+      },
+      "strict": {
+        "cases": 15,
+        "success_rate": 1.0,
+        "hallucination_detection_rate": 1.0,
+        "hallucination_cases": 1
+      }
+    }
+  },
+  "comparison": [
+    {
+      "profile": "integration_service",
+      "sample_count": 1500,
+      "phase0_p50_ms": 677.637,
+      "phase2_p50_ms": 95.82,
+      "phase3_p50_ms": 64.178,
+      "phase0_to_phase3_p50_reduction_pct": 90.53,
+      "phase2_to_phase3_p50_delta_pct": -33.02,
+      "phase0_p95_ms": 994.102,
+      "phase2_p95_ms": 222.789,
+      "phase3_p95_ms": 122.868,
+      "phase3_p99_ms": 180.366,
+      "validation_level_summary": {
+        "fast": {
+          "samples": 180,
+          "share": 0.12,
+          "p50_ms": 69.669,
+          "p95_ms": 117.175,
+          "p99_ms": 156.797
+        },
+        "standard": {
+          "samples": 930,
+          "share": 0.62,
+          "p50_ms": 62.519,
+          "p95_ms": 116.148,
+          "p99_ms": 158.538
+        },
+        "strict": {
+          "samples": 390,
+          "share": 0.26,
+          "p50_ms": 70.633,
+          "p95_ms": 134.081,
+          "p99_ms": 201.959
+        }
+      },
+      "success_rate": 1.0,
+      "unsafe_queries_executed": 0,
+      "schema_introspection_count": 0,
+      "error_rate": 0.0
+    },
+    {
+      "profile": "integration_http_inprocess_concurrency_1",
+      "sample_count": 1500,
+      "phase0_p50_ms": 728.711,
+      "phase2_p50_ms": 105.299,
+      "phase3_p50_ms": 61.552,
+      "phase0_to_phase3_p50_reduction_pct": 91.55,
+      "phase2_to_phase3_p50_delta_pct": -41.55,
+      "phase0_p95_ms": 1050.286,
+      "phase2_p95_ms": 257.335,
+      "phase3_p95_ms": 91.875,
+      "phase3_p99_ms": 117.183,
+      "validation_level_summary": {
+        "fast": {
+          "samples": 180,
+          "share": 0.12,
+          "p50_ms": 65.834,
+          "p95_ms": 89.263,
+          "p99_ms": 107.793
+        },
+        "standard": {
+          "samples": 930,
+          "share": 0.62,
+          "p50_ms": 60.564,
+          "p95_ms": 86.585,
+          "p99_ms": 106.481
+        },
+        "strict": {
+          "samples": 390,
+          "share": 0.26,
+          "p50_ms": 60.82,
+          "p95_ms": 101.403,
+          "p99_ms": 157.1
+        }
+      },
+      "success_rate": 1.0,
+      "unsafe_queries_executed": 0,
+      "schema_introspection_count": 0,
+      "error_rate": 0.0
+    },
+    {
+      "profile": "integration_http_inprocess_concurrency_5",
+      "sample_count": 1500,
+      "phase0_p50_ms": 1760.632,
+      "phase2_p50_ms": 151.175,
+      "phase3_p50_ms": 125.315,
+      "phase0_to_phase3_p50_reduction_pct": 92.88,
+      "phase2_to_phase3_p50_delta_pct": -17.11,
+      "phase0_p95_ms": 2636.996,
+      "phase2_p95_ms": 236.573,
+      "phase3_p95_ms": 205.082,
+      "phase3_p99_ms": 248.381,
+      "validation_level_summary": {
+        "fast": {
+          "samples": 180,
+          "share": 0.12,
+          "p50_ms": 131.032,
+          "p95_ms": 205.098,
+          "p99_ms": 237.924
+        },
+        "standard": {
+          "samples": 930,
+          "share": 0.62,
+          "p50_ms": 123.683,
+          "p95_ms": 201.759,
+          "p99_ms": 243.706
+        },
+        "strict": {
+          "samples": 390,
+          "share": 0.26,
+          "p50_ms": 130.113,
+          "p95_ms": 220.993,
+          "p99_ms": 259.865
+        }
+      },
+      "success_rate": 1.0,
+      "unsafe_queries_executed": 0,
+      "schema_introspection_count": 0,
+      "error_rate": 0.0
+    }
+  ],
+  "mandatory_gates": {
+    "fast_or_standard_share_at_least_60_pct": true,
+    "unsafe_executions_zero": true,
+    "hallucination_detection_non_regression": true,
+    "execution_accuracy_non_regression": true,
+    "warm_p50_improves_at_least_50_pct_from_phase0": true,
+    "validation_level_and_reason_codes_recorded": true,
+    "shadow_mode_supported": true,
+    "adaptive_feature_flag_supported": true,
+    "strict_only_emergency_mode_supported": true
+  },
+  "acceptance_notes": [
+    "Adaptive validation defaults off and shadow mode remains the default rollout posture.",
+    "The 30-repetition matrix measures QueryService/FastAPI/PostgreSQL application paths with deterministic provider fixtures; deterministic-report-smoke timing is not used as application latency.",
+    "Raw benchmark files are listed for local traceability but are not intended for commit; this summary is sanitized.",
+    "Actual constraint violations and destructive SQL remain strict-only. Linker unresolved terms force at least standard validation and cannot reach fast execution."
+  ],
+  "push_recommendation": "YES"
+}

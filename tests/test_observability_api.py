@@ -30,6 +30,14 @@ def _settings() -> SimpleNamespace:
         multi_query_complexity_threshold=2,
         multi_query_easy_skip_enabled=True,
         intermediate_trace_logging_enabled=False,
+        adaptive_validation_enabled=False,
+        adaptive_validation_mode="shadow",
+        risk_fast_max_score=0.34,
+        risk_standard_max_score=0.67,
+        risk_low_link_confidence=0.55,
+        risk_low_model_confidence=0.55,
+        risk_low_retrieval_margin=0.08,
+        risk_high_scan_rows=100000,
     )
 
 
@@ -122,4 +130,8 @@ def test_query_response_keeps_old_meta_and_adds_trace_fields(monkeypatch) -> Non
     assert "provider_attempt_count" in meta
     assert "sql_statement_count" in meta
     assert meta["db_round_trip_count"] >= 0
-    assert meta["validation_level"] == "standard"
+    assert meta["validation_level"] == "strict"
+    assert meta["validation_mode"] == "shadow"
+    assert meta["proposed_validation_level"] in {"fast", "standard", "strict"}
+    assert meta["validation_reason_codes"]
+    assert "risk_score" in meta

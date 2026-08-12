@@ -99,8 +99,14 @@ def classify_behavior(case: dict[str, Any], response: Any | None, *, http_body: 
 
 def summarize_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
     by_bucket: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    by_validation_level: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    by_proposed_validation_level: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for sample in samples:
         by_bucket[str(sample.get("bucket", "unknown"))].append(sample)
+        if sample.get("validation_level"):
+            by_validation_level[str(sample.get("validation_level"))].append(sample)
+        if sample.get("proposed_validation_level"):
+            by_proposed_validation_level[str(sample.get("proposed_validation_level"))].append(sample)
 
     bucket_summary: dict[str, Any] = {}
     for bucket, rows in by_bucket.items():
@@ -122,6 +128,26 @@ def summarize_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
             "unsafe_queries_executed": sum(
                 int(row.get("unsafe_queries_executed", 0) or 0) for row in rows
             ),
+        }
+    validation_summary: dict[str, Any] = {}
+    for level, rows in by_validation_level.items():
+        latencies = [float(row.get("latency_ms", 0.0)) for row in rows]
+        validation_summary[level] = {
+            "samples": len(rows),
+            "share": round(len(rows) / max(1, len(samples)), 3),
+            "p50_ms": percentile(latencies, 50),
+            "p95_ms": percentile(latencies, 95),
+            "p99_ms": percentile(latencies, 99),
+        }
+    proposed_validation_summary: dict[str, Any] = {}
+    for level, rows in by_proposed_validation_level.items():
+        latencies = [float(row.get("latency_ms", 0.0)) for row in rows]
+        proposed_validation_summary[level] = {
+            "samples": len(rows),
+            "share": round(len(rows) / max(1, len(samples)), 3),
+            "p50_ms": percentile(latencies, 50),
+            "p95_ms": percentile(latencies, 95),
+            "p99_ms": percentile(latencies, 99),
         }
     latencies = [float(row.get("latency_ms", 0.0)) for row in samples]
     wall_time_ms = sum(latencies)
@@ -156,4 +182,6 @@ def summarize_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
         "behavior_success_rate": behavior_success_rate,
         "success_rate": behavior_success_rate,
         "bucket_summary": bucket_summary,
+        "validation_level_summary": validation_summary,
+        "proposed_validation_level_summary": proposed_validation_summary,
     }

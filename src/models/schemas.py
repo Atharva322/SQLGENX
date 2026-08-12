@@ -51,6 +51,12 @@ class ExecutionMeta(BaseModel):
     sql_statement_latency_ms: int = 0
     cache_state: dict[str, Any] = Field(default_factory=dict)
     validation_level: str = "standard"
+    proposed_validation_level: str = "standard"
+    validation_mode: str = "shadow"
+    validation_reason_codes: list[str] = Field(default_factory=list)
+    risk_score: float = 0.0
+    risk_classifier_version: str = ""
+    risk_signals: dict[str, Any] = Field(default_factory=dict)
     timeout_stage: str | None = None
     failure_stage: str | None = None
     llm_token_usage: dict[str, Any] = Field(default_factory=dict)

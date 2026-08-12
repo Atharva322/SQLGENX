@@ -40,6 +40,11 @@ def _request(client: TestClient, case: dict[str, Any]) -> dict[str, Any]:
                 "schema_introspection_count": int(meta.get("schema_introspection_count", 0) or 0),
                 "query_execution_count": int(meta.get("query_execution_count", 0) or 0),
                 "trace_coverage_ratio": float(meta.get("trace_coverage_ratio", 0.0) or 0.0),
+                "validation_level": str(meta.get("validation_level", "")),
+                "proposed_validation_level": str(meta.get("proposed_validation_level", "")),
+                "validation_mode": str(meta.get("validation_mode", "")),
+                "validation_reason_codes": list(meta.get("validation_reason_codes", []) or []),
+                "risk_score": float(meta.get("risk_score", 0.0) or 0.0),
             }
         )
         if case.get("safety_expectation") == "block" and int(meta.get("query_execution_count", 0) or 0) > 0:

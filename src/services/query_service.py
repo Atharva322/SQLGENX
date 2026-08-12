@@ -44,6 +44,11 @@ from src.validation.multi_query import (
     evaluate_multi_query_agreement,
     should_run_multi_query_validation,
 )
+from src.validation.risk_classifier import (
+    RiskClassifier,
+    RiskThresholds,
+    extract_risk_signals,
+)
 from src.validation.sanity import analyze_result_sanity
 from src.validation.sql_constraints import validate_sql_identifiers
 
@@ -277,6 +282,63 @@ class QueryService:
             notes=notes or list(fallback_plan.notes),
         )
 
+    def _risk_thresholds(self) -> RiskThresholds:
+        return RiskThresholds(
+            fast_max_score=float(getattr(self.settings, "risk_fast_max_score", 0.34)),
+            standard_max_score=float(getattr(self.settings, "risk_standard_max_score", 0.67)),
+            low_link_confidence=float(getattr(self.settings, "risk_low_link_confidence", 0.55)),
+            low_model_confidence=float(getattr(self.settings, "risk_low_model_confidence", 0.55)),
+            low_retrieval_margin=float(getattr(self.settings, "risk_low_retrieval_margin", 0.08)),
+            high_scan_rows=int(getattr(self.settings, "risk_high_scan_rows", 100_000)),
+        )
+
+    def _validation_mode(self) -> str:
+        mode = str(getattr(self.settings, "adaptive_validation_mode", "shadow")).lower()
+        if mode not in {"shadow", "adaptive", "strict_only"}:
+            return "shadow"
+        if mode == "adaptive" and not bool(getattr(self.settings, "adaptive_validation_enabled", False)):
+            return "shadow"
+        return mode
+
+    def _record_validation_decision(
+        self,
+        *,
+        trace: RequestTrace,
+        question: str,
+        sql: str,
+        linking: LinkingContext,
+        constraint: ConstraintValidationResult,
+        model_confidence: float | None,
+        estimated_rows: int = 0,
+        timeout_or_failure: bool = False,
+    ) -> str:
+        classifier = RiskClassifier(self._risk_thresholds())
+        classification = classifier.classify(
+            extract_risk_signals(
+                question=question,
+                sql=sql,
+                linking=linking,
+                constraint=constraint,
+                model_confidence=model_confidence,
+                estimated_scan_rows=estimated_rows,
+                timeout_or_failure=timeout_or_failure,
+            )
+        )
+        mode = self._validation_mode()
+        actual_level = classification.level if mode == "adaptive" else "strict"
+        if mode == "strict_only":
+            actual_level = "strict"
+        trace.set_validation_decision(
+            actual_level=actual_level,
+            proposed_level=classification.level,
+            mode=mode,
+            reason_codes=classification.reason_codes,
+            risk_score=classification.score,
+            classifier_version=classification.classifier_version,
+            signals=classification.signals,
+        )
+        return actual_level
+
     def _build_response(
         self,
         query_id: str,
@@ -301,35 +363,45 @@ class QueryService:
         trace: RequestTrace | None = None,
     ) -> QueryResponse:
         prompt = prompt_context or (request_context.prompt_for_validation() if request_context else "")
-        with (trace.timer("alignment_validation_ms") if trace else nullcontext()):
-            if request_context:
-                back_translated_question = request_context.back_translate(
-                    self.llm, guarded_sql, prompt_context=prompt
-                )
-            else:
-                if not prompt:
-                    prompt = build_prompt(
-                        question,
-                        connection_id=connection_id,
-                        linking_context=linking_meta,
+        validation_level = trace.validation_level if trace else "strict"
+        if guarded_sql.strip().upper() == "UNANSWERABLE":
+            validation_level = "strict"
+        if validation_level in {"standard", "strict"}:
+            with (trace.timer("alignment_validation_ms") if trace else nullcontext()):
+                if request_context:
+                    back_translated_question = request_context.back_translate(
+                        self.llm, guarded_sql, prompt_context=prompt
                     )
-                back_translated_question = self.llm.back_translate_sql(
-                    sql=guarded_sql, prompt_context=prompt
+                else:
+                    if not prompt:
+                        prompt = build_prompt(
+                            question,
+                            connection_id=connection_id,
+                            linking_context=linking_meta,
+                        )
+                    back_translated_question = self.llm.back_translate_sql(
+                        sql=guarded_sql, prompt_context=prompt
+                    )
+                alignment = verify_sql_alignment(
+                    original_question=question,
+                    back_translated_question=back_translated_question,
                 )
+            warnings.extend(alignment.warnings)
+            log_execution_event(
+                "alignment_check",
+                {
+                    "connection_id": connection_id,
+                    "question": question,
+                    "back_translated_question": back_translated_question,
+                    "score": alignment.score,
+                },
+            )
+        else:
             alignment = verify_sql_alignment(
                 original_question=question,
-                back_translated_question=back_translated_question,
+                back_translated_question=question,
             )
-        warnings.extend(alignment.warnings)
-        log_execution_event(
-            "alignment_check",
-            {
-                "connection_id": connection_id,
-                "question": question,
-                "back_translated_question": back_translated_question,
-                "score": alignment.score,
-            },
-        )
+            warnings.append("Policy: alignment validation skipped for fast validation level.")
 
         with (trace.timer("sanity_validation_ms") if trace else nullcontext()):
             sanity = analyze_result_sanity(rows)
@@ -351,7 +423,7 @@ class QueryService:
             or len(generated.accessed_tables) > 1
             or " group by " in f" {guarded_sql.lower()} "
         )
-        if should_multi_query:
+        if should_multi_query and validation_level == "strict":
             with (trace.timer("agreement_validation_ms") if trace else nullcontext()):
                 alt_generated = agreement_candidate
                 if alt_generated is None or normalize_sql(alt_generated.sql) == normalize_sql(guarded_sql):
@@ -381,7 +453,12 @@ class QueryService:
                 multi_query_score = 0.4
                 warnings.append("Alternative validation query blocked by guardrails.")
         elif self.settings.multi_query_easy_skip_enabled:
-            warnings.append("Policy: multi-query skipped for easy/low-risk prompt.")
+            if validation_level != "strict":
+                warnings.append(
+                    f"Policy: multi-query skipped for {validation_level} validation level."
+                )
+            else:
+                warnings.append("Policy: multi-query skipped for easy/low-risk prompt.")
 
         with (trace.timer("schema_coverage_ms") if trace else nullcontext()):
             schema_coverage = self._schema_coverage_score(
@@ -438,6 +515,12 @@ class QueryService:
                 db_round_trip_count=trace.db_round_trip_count if trace else 0,
                 cache_state=trace.cache_state if trace else {},
                 validation_level=trace.validation_level if trace else "standard",
+                proposed_validation_level=trace.proposed_validation_level if trace else "standard",
+                validation_mode=trace.validation_mode if trace else "shadow",
+                validation_reason_codes=list(trace.validation_reason_codes) if trace else [],
+                risk_score=trace.risk_score if trace else 0.0,
+                risk_classifier_version=trace.risk_classifier_version if trace else "",
+                risk_signals=dict(trace.risk_signals) if trace else {},
                 timeout_stage=trace.timeout_stage if trace else None,
                 failure_stage=trace.failure_stage if trace else None,
                 llm_token_usage=llm_token_usage or {},
@@ -474,6 +557,12 @@ class QueryService:
         response.execution_meta.sql_statement_latency_ms = snapshot.sql_statement_latency_ms
         response.execution_meta.cache_state = dict(snapshot.cache_state)
         response.execution_meta.validation_level = snapshot.validation_level
+        response.execution_meta.proposed_validation_level = snapshot.proposed_validation_level
+        response.execution_meta.validation_mode = snapshot.validation_mode
+        response.execution_meta.validation_reason_codes = list(snapshot.validation_reason_codes)
+        response.execution_meta.risk_score = snapshot.risk_score
+        response.execution_meta.risk_classifier_version = snapshot.risk_classifier_version
+        response.execution_meta.risk_signals = dict(snapshot.risk_signals)
         response.execution_meta.timeout_stage = snapshot.timeout_stage
         response.execution_meta.failure_stage = snapshot.failure_stage
         if snapshot.llm_token_usage:
@@ -659,42 +748,17 @@ class QueryService:
                     question=question, prompt_context=final_prompt
                 )
             llm_usages.append(primary.token_usage)
-            if self.settings.alternative_sql_adaptive_enabled and (
-                complexity_score < self.settings.alternative_sql_complexity_threshold
-            ):
-                alt_skipped_easy = True
-                generated = primary
-                reasoning = ReasoningMeta(
-                    strategy="primary_only_easy_path",
-                    selected_candidate="primary",
-                    candidate_scores=[],
-                    validator_notes=["Alternative SQL skipped for easy/low-risk prompt."],
-                    query_plan=validated_plan.model_dump(),
-                )
-            else:
-                with trace.timer("alternative_sql_generation_ms"):
-                    alternative = self.llm.generate_alternative_sql(
-                        question=question, prompt_context=final_prompt, primary_sql=primary.sql
-                    )
-                llm_usages.append(alternative.token_usage)
-                selected_name, generated, candidate_scores, validator_notes = (
-                    self._select_candidate_with_validator(
-                        question=question,
-                        prompt=final_prompt,
-                        candidates=[("primary", primary), ("alternative", alternative)],
-                        max_rows=max_rows,
-                        request_context=request_context,
-                        trace=trace,
-                    )
-                )
-                reasoning = ReasoningMeta(
-                    strategy="planner_validator_selection",
-                    selected_candidate=selected_name,
-                    candidate_scores=candidate_scores,
-                    validator_notes=validator_notes,
-                    query_plan=validated_plan.model_dump(),
-                )
-                agreement_candidate = alternative if selected_name == "primary" else primary
+            generated = primary
+            alt_skipped_easy = True
+            reasoning = ReasoningMeta(
+                strategy="primary_then_adaptive_validation",
+                selected_candidate="primary",
+                candidate_scores=[],
+                validator_notes=[
+                    "Alternative SQL decision deferred until after deterministic inspection."
+                ],
+                query_plan=validated_plan.model_dump(),
+            )
         if "agreement_candidate" not in locals():
             agreement_candidate = None
         constraint_meta = ConstraintValidationResult(passed=True)
@@ -707,6 +771,14 @@ class QueryService:
             warnings = intent_reasons + [
                 "Query blocked due to malicious/destructive user intent."
             ]
+            self._record_validation_decision(
+                trace=trace,
+                question=question,
+                sql=guarded_sql,
+                linking=linking_artifacts.context,
+                constraint=constraint_meta,
+                model_confidence=generated.model_confidence,
+            )
             response = self._build_response(
                 query_id=query_id,
                 connection_id=resolved_connection_id,
@@ -765,6 +837,14 @@ class QueryService:
                 ]
             if alt_skipped_easy:
                 warnings.append("Policy: alternative candidate generation skipped for easy prompt.")
+            self._record_validation_decision(
+                trace=trace,
+                question=question,
+                sql=generated.sql,
+                linking=linking_artifacts.context,
+                constraint=constraint_meta,
+                model_confidence=generated.model_confidence,
+            )
             response = self._build_response(
                 query_id=query_id,
                 connection_id=resolved_connection_id,
@@ -840,6 +920,14 @@ class QueryService:
                         "violation"
                         if constraint_meta.violation_type == "join_not_grounded"
                         else "unknown"
+                    )
+                    self._record_validation_decision(
+                        trace=trace,
+                        question=question,
+                        sql=guarded_sql,
+                        linking=linking_artifacts.context,
+                        constraint=constraint_meta,
+                        model_confidence=generated.model_confidence,
                     )
                     response = self._build_response(
                         query_id=query_id,
@@ -923,6 +1011,20 @@ class QueryService:
                     explain_row_limit=self.settings.max_explain_rows,
                 )
             warnings.extend(final_guardrail.reasons)
+            validation_level = self._record_validation_decision(
+                trace=trace,
+                question=question,
+                sql=guarded_sql,
+                linking=linking_artifacts.context,
+                constraint=constraint_meta,
+                model_confidence=generated.model_confidence,
+                estimated_rows=estimated_rows,
+                timeout_or_failure=trace.failure_stage == "explain",
+            )
+            if validation_level != "strict":
+                reasoning.validator_notes.append(
+                    f"Adaptive validation selected {validation_level}; strict LLM agreement is skipped."
+                )
 
             if final_guardrail.allowed:
                 with trace.timer("query_execution_ms"):
@@ -958,6 +1060,14 @@ class QueryService:
             trace.mark_failure("guardrail")
             log_blocked_query(question=question, sql=guarded_sql, reasons=initial_guardrail.reasons)
             warnings.append("Query execution skipped due to guardrails.")
+            self._record_validation_decision(
+                trace=trace,
+                question=question,
+                sql=guarded_sql,
+                linking=linking_artifacts.context,
+                constraint=constraint_meta,
+                model_confidence=generated.model_confidence,
+            )
 
         response = self._build_response(
             query_id=query_id,

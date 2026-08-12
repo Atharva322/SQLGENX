@@ -70,6 +70,12 @@ class TraceSnapshot:
     db_round_trip_count: int
     cache_state: Mapping[str, Any]
     validation_level: str
+    proposed_validation_level: str
+    validation_mode: str
+    validation_reason_codes: tuple[str, ...]
+    risk_score: float
+    risk_classifier_version: str
+    risk_signals: Mapping[str, Any]
     failure_stage: str | None
     timeout_stage: str | None
     provider_attempt_count: int
@@ -112,6 +118,12 @@ class RequestTrace:
     sql_statement_latency_ms: int = 0
     cache_state: dict[str, Any] = field(default_factory=dict)
     validation_level: str = "standard"
+    proposed_validation_level: str = "standard"
+    validation_mode: str = "shadow"
+    validation_reason_codes: list[str] = field(default_factory=list)
+    risk_score: float = 0.0
+    risk_classifier_version: str = ""
+    risk_signals: dict[str, Any] = field(default_factory=dict)
     failure_stage: str | None = None
     timeout_stage: str | None = None
     _started_at: float = field(default_factory=perf_counter)
@@ -154,6 +166,25 @@ class RequestTrace:
     def mark_timeout(self, stage: str) -> None:
         self.timeout_stage = stage
         self.mark_failure(stage)
+
+    def set_validation_decision(
+        self,
+        *,
+        actual_level: str,
+        proposed_level: str,
+        mode: str,
+        reason_codes: list[str],
+        risk_score: float,
+        classifier_version: str,
+        signals: dict[str, Any],
+    ) -> None:
+        self.validation_level = actual_level
+        self.proposed_validation_level = proposed_level
+        self.validation_mode = mode
+        self.validation_reason_codes = list(reason_codes)
+        self.risk_score = risk_score
+        self.risk_classifier_version = classifier_version
+        self.risk_signals = redact_secrets(dict(signals))
 
     def total_duration_ms(self) -> int:
         ended_at = self.finished_at or perf_counter()
@@ -268,6 +299,12 @@ class RequestTrace:
             db_round_trip_count=self.db_round_trip_count,
             cache_state=MappingProxyType(cache_copy),
             validation_level=self.validation_level,
+            proposed_validation_level=self.proposed_validation_level,
+            validation_mode=self.validation_mode,
+            validation_reason_codes=tuple(self.validation_reason_codes),
+            risk_score=self.risk_score,
+            risk_classifier_version=self.risk_classifier_version,
+            risk_signals=MappingProxyType(redact_secrets(dict(self.risk_signals))),
             failure_stage=self.failure_stage,
             timeout_stage=self.timeout_stage,
             provider_attempt_count=self.provider_attempt_count,
