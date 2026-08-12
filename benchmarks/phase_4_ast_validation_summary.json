@@ -1,0 +1,186 @@
+{
+  "phase": "phase_4_ast_validation",
+  "branch": "perf/phase-4-ast-validation",
+  "base_phase": "phase_3_adaptive_validation",
+  "measurement_commit": "0df51b8bbd31d773ce80636ef674f1a3550bd99d",
+  "database_seed_fingerprint": "phase0-benchmark-v1",
+  "provider_profile": "deterministic",
+  "provider_model": "sqlgenx-fixture-v1",
+  "generated_at_local": "2026-08-12T09:31:00-07:00",
+  "ast_validation": {
+    "parser": "sqlglot",
+    "dialect": "postgres",
+    "feature_flag": "AST_VALIDATION_ENABLED",
+    "default_enabled": true,
+    "allow_select_star_flag": "AST_ALLOW_SELECT_STAR",
+    "defense_in_depth": "Existing sqlparse guardrails and identifier constraints remain active; AST validation is additive."
+  },
+  "sanitization": {
+    "raw_prompts_included": false,
+    "raw_sql_included": false,
+    "raw_rows_included": false,
+    "credentials_or_database_urls_included": false,
+    "raw_benchmark_files_checked_in": false
+  },
+  "source_result_files": {
+    "phase4_integration_service": "benchmarks/results/integration-service_20260812T162602Z.json",
+    "phase4_integration_http_c1": "benchmarks/results/integration-http-inprocess_20260812T162832Z.json",
+    "phase4_integration_http_c5": "benchmarks/results/integration-http-inprocess_20260812T162945Z.json",
+    "phase3_summary": "benchmarks/phase_3_adaptive_validation_summary.json",
+    "phase0_summary": "benchmarks/phase_0_real_baseline_summary.json"
+  },
+  "quality_non_regression": {
+    "full_eval_total_cases": 60,
+    "full_eval_success_rate": 1.0,
+    "hallucination_detection_rate": 0.692,
+    "guardrail_effectiveness": 1.0,
+    "unsafe_block_rate": 1.0,
+    "false_block_rate": 0.0,
+    "execution_error_count": 0,
+    "schema_recall_at_5": 0.978,
+    "schema_ndcg_at_5": 0.896,
+    "retrieval_only_limited_cases": 20,
+    "retrieval_only_schema_recall_at_5": 1.0,
+    "retrieval_only_schema_ndcg_at_5": 0.966,
+    "phase3_success_rate": 1.0,
+    "phase3_unsafe_block_rate": 1.0,
+    "quality_regression_detected": false
+  },
+  "comparison": [
+    {
+      "profile": "integration_service",
+      "sample_count": 1500,
+      "concurrency": 1,
+      "repetitions": 30,
+      "phase0_p50_ms": 677.637,
+      "phase3_p50_ms": 64.178,
+      "phase4_p50_ms": 94.234,
+      "phase4_p95_ms": 143.739,
+      "phase4_p99_ms": 213.538,
+      "phase0_to_phase4_p50_reduction_pct": 86.09,
+      "phase3_to_phase4_p50_delta_pct": 46.83,
+      "success_rate": 0.98,
+      "behavior_success_rate": 0.98,
+      "unsafe_queries_executed": 0,
+      "schema_introspection_count": 0,
+      "minimum_trace_coverage": 1.0,
+      "error_rate": 0.0,
+      "requests_per_second": 12.385,
+      "ast_validation_stage_ms": {
+        "samples_with_stage_timing": 1050,
+        "p50_ms": 3,
+        "p95_ms": 6,
+        "p99_ms": 10,
+        "max_ms": 101,
+        "mean_ms": 3.379
+      },
+      "validation_level_summary": {
+        "fast": {
+          "samples": 150,
+          "share": 0.1,
+          "p50_ms": 100.444,
+          "p95_ms": 137.268,
+          "p99_ms": 205.121
+        },
+        "standard": {
+          "samples": 930,
+          "share": 0.62,
+          "p50_ms": 92.984,
+          "p95_ms": 129.178,
+          "p99_ms": 225.206
+        },
+        "strict": {
+          "samples": 420,
+          "share": 0.28,
+          "p50_ms": 87.891,
+          "p95_ms": 154.472,
+          "p99_ms": 195.43
+        }
+      }
+    },
+    {
+      "profile": "integration_http_inprocess_concurrency_1",
+      "sample_count": 1500,
+      "concurrency": 1,
+      "repetitions": 30,
+      "phase0_p50_ms": 728.711,
+      "phase3_p50_ms": 61.552,
+      "phase4_p50_ms": 103.493,
+      "phase4_p95_ms": 154.316,
+      "phase4_p99_ms": 267.448,
+      "phase0_to_phase4_p50_reduction_pct": 85.8,
+      "phase3_to_phase4_p50_delta_pct": 68.14,
+      "success_rate": 0.98,
+      "behavior_success_rate": 0.98,
+      "unsafe_queries_executed": 0,
+      "schema_introspection_count": 0,
+      "minimum_trace_coverage": 1.0,
+      "error_rate": 0.0,
+      "requests_per_second": 11.069,
+      "ast_validation_stage_ms": {
+        "available": false,
+        "reason": "HTTP benchmark samples do not retain stage_durations_ms; service profile records AST stage timing."
+      }
+    },
+    {
+      "profile": "integration_http_inprocess_concurrency_5",
+      "sample_count": 1500,
+      "concurrency": 5,
+      "repetitions": 30,
+      "phase0_p50_ms": 1760.632,
+      "phase3_p50_ms": 125.315,
+      "phase4_p50_ms": 201.407,
+      "phase4_p95_ms": 345.599,
+      "phase4_p99_ms": 443.153,
+      "phase0_to_phase4_p50_reduction_pct": 88.56,
+      "phase3_to_phase4_p50_delta_pct": 60.72,
+      "success_rate": 0.98,
+      "behavior_success_rate": 0.98,
+      "unsafe_queries_executed": 0,
+      "schema_introspection_count": 0,
+      "minimum_trace_coverage": 1.0,
+      "error_rate": 0.0,
+      "requests_per_second": 5.247,
+      "ast_validation_stage_ms": {
+        "available": false,
+        "reason": "HTTP benchmark samples do not retain stage_durations_ms; service profile records AST stage timing."
+      }
+    }
+  ],
+  "mandatory_gates": {
+    "parser_fixtures_pass": true,
+    "adversarial_fixtures_pass": true,
+    "schema_identifier_validation_pass": true,
+    "normalization_duplicate_fingerprint_pass": true,
+    "service_pre_execution_ast_block_pass": true,
+    "parser_failures_fail_closed": true,
+    "valid_low_risk_path_records_ast_metadata": true,
+    "unsafe_executions_zero": true,
+    "quality_non_regression": true,
+    "trace_stage_recorded": true,
+    "frontend_build_and_tests_pass": true,
+    "postgres_integration_smoke_pass": true,
+    "full_30_repetition_matrix_pass": true
+  },
+  "mandatory_gate_commands": {
+    "compile": ".venv\\Scripts\\python.exe -m compileall src tests",
+    "pytest_full": ".venv\\Scripts\\python.exe -m pytest",
+    "pytest_postgres": "$env:DATABASE_URL='<benchmark-db-url>'; $env:CONNECTION_URLS_JSON='{}'; .venv\\Scripts\\python.exe -m pytest tests\\integration\\test_postgres_benchmark_smoke.py -rs",
+    "frontend_unit": "npm test",
+    "frontend_build": "npm run build",
+    "quality_eval": "$env:DATABASE_URL='<benchmark-db-url>'; $env:CONNECTION_URLS_JSON='{}'; $env:LLM_PROVIDER='deterministic'; $env:LLM_MODEL='sqlgenx-fixture-v1'; $env:CONTEXT_INDEX_ENABLED='true'; $env:ADAPTIVE_VALIDATION_ENABLED='true'; $env:ADAPTIVE_VALIDATION_MODE='adaptive'; $env:AST_VALIDATION_ENABLED='true'; .venv\\Scripts\\python.exe evals\\run_evals.py",
+    "retrieval_eval": "$env:DATABASE_URL='<benchmark-db-url>'; $env:CONNECTION_URLS_JSON='{}'; $env:LLM_PROVIDER='deterministic'; $env:LLM_MODEL='sqlgenx-fixture-v1'; $env:CONTEXT_INDEX_ENABLED='true'; $env:ADAPTIVE_VALIDATION_ENABLED='true'; $env:ADAPTIVE_VALIDATION_MODE='adaptive'; $env:AST_VALIDATION_ENABLED='true'; .venv\\Scripts\\python.exe evals\\run_evals.py --retrieval-only --limit 20",
+    "benchmark_service": "$env:DATABASE_URL='<benchmark-db-url>'; $env:CONNECTION_URLS_JSON='{}'; $env:LLM_PROVIDER='deterministic'; $env:LLM_MODEL='sqlgenx-fixture-v1'; $env:CONTEXT_INDEX_ENABLED='true'; $env:ADAPTIVE_VALIDATION_ENABLED='true'; $env:ADAPTIVE_VALIDATION_MODE='adaptive'; $env:AST_VALIDATION_ENABLED='true'; .venv\\Scripts\\python.exe benchmarks\\run_latency.py --profile integration-service --repetitions 30",
+    "benchmark_http_c1": "$env:DATABASE_URL='<benchmark-db-url>'; $env:CONNECTION_URLS_JSON='{}'; $env:LLM_PROVIDER='deterministic'; $env:LLM_MODEL='sqlgenx-fixture-v1'; $env:CONTEXT_INDEX_ENABLED='true'; $env:ADAPTIVE_VALIDATION_ENABLED='true'; $env:ADAPTIVE_VALIDATION_MODE='adaptive'; $env:AST_VALIDATION_ENABLED='true'; .venv\\Scripts\\python.exe benchmarks\\run_latency.py --profile integration-http --concurrency 1 --repetitions 30",
+    "benchmark_http_c5": "$env:DATABASE_URL='<benchmark-db-url>'; $env:CONNECTION_URLS_JSON='{}'; $env:LLM_PROVIDER='deterministic'; $env:LLM_MODEL='sqlgenx-fixture-v1'; $env:CONTEXT_INDEX_ENABLED='true'; $env:ADAPTIVE_VALIDATION_ENABLED='true'; $env:ADAPTIVE_VALIDATION_MODE='adaptive'; $env:AST_VALIDATION_ENABLED='true'; .venv\\Scripts\\python.exe benchmarks\\run_latency.py --profile integration-http --concurrency 5 --repetitions 30"
+  },
+  "acceptance_notes": [
+    "SQL AST parsing is fail-closed and allows exactly one read-only SELECT/set-operation statement.",
+    "Identifier validation is scope-aware for aliases, CTE outputs, joins, subqueries, and set operations.",
+    "AST validation runs after existing guardrails and before EXPLAIN/query execution.",
+    "RequestTrace records ast_validation_ms and response execution_meta carries ast_valid, ast_fingerprint, and ast_reason_codes.",
+    "Deterministic benchmark timing is real QueryService/FastAPI/PostgreSQL path timing. The deterministic-report-smoke fake runner was not used as application latency.",
+    "Phase 4 increases p50 versus Phase 3 due to AST parsing/validation overhead, but remains 85.8%-88.56% faster than Phase 0 p50 across the measured matrix."
+  ],
+  "push_recommendation": "YES"
+}

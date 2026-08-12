@@ -50,6 +50,7 @@ from src.validation.risk_classifier import (
     extract_risk_signals,
 )
 from src.validation.sanity import analyze_result_sanity
+from src.validation.ast_sql import analyze_sql_ast
 from src.validation.sql_constraints import validate_sql_identifiers
 
 
@@ -563,6 +564,11 @@ class QueryService:
         response.execution_meta.risk_score = snapshot.risk_score
         response.execution_meta.risk_classifier_version = snapshot.risk_classifier_version
         response.execution_meta.risk_signals = dict(snapshot.risk_signals)
+        ast_state = dict(snapshot.cache_state).get("ast_validation")
+        if isinstance(ast_state, dict):
+            response.execution_meta.ast_valid = bool(ast_state.get("valid"))
+            response.execution_meta.ast_fingerprint = ast_state.get("fingerprint")
+            response.execution_meta.ast_reason_codes = list(ast_state.get("reason_codes", []) or [])
         response.execution_meta.timeout_stage = snapshot.timeout_stage
         response.execution_meta.failure_stage = snapshot.failure_stage
         if snapshot.llm_token_usage:
@@ -905,6 +911,107 @@ class QueryService:
         syntax_valid = initial_guardrail.syntax_valid
 
         if initial_guardrail.allowed:
+            if bool(getattr(self.settings, "ast_validation_enabled", True)):
+                with trace.timer("ast_validation_ms"):
+                    ast_analysis = analyze_sql_ast(
+                        guarded_sql,
+                        request_context.schema,
+                        allow_select_star=bool(
+                            getattr(self.settings, "ast_allow_select_star", True)
+                        ),
+                    )
+                trace.set_cache_state(
+                    "ast_validation",
+                    {
+                        "valid": ast_analysis.valid,
+                        "fingerprint": ast_analysis.fingerprint,
+                        "reason_codes": ast_analysis.reason_codes,
+                        "tables": ast_analysis.tables,
+                        "columns": ast_analysis.columns,
+                        "subquery_depth": ast_analysis.subquery_depth,
+                        "set_operations": ast_analysis.set_operations,
+                    },
+                )
+                if not ast_analysis.valid:
+                    trace.mark_failure("ast_validation")
+                    post_generation_constraint_unanswerable = True
+                    warnings.extend(ast_analysis.warnings)
+                    warnings.append("Converted to UNANSWERABLE due to AST validation failure.")
+                    constraint_meta = ConstraintValidationResult(
+                        passed=False,
+                        blocked_identifiers=ast_analysis.reason_codes,
+                        reasons=ast_analysis.warnings,
+                        violation_type="ast_validation",
+                        enforced_policy="ast_sql_validation",
+                    )
+                    self._record_validation_decision(
+                        trace=trace,
+                        question=question,
+                        sql=guarded_sql,
+                        linking=linking_artifacts.context,
+                        constraint=constraint_meta,
+                        model_confidence=generated.model_confidence,
+                    )
+                    response = self._build_response(
+                        query_id=query_id,
+                        connection_id=resolved_connection_id,
+                        session_id=resolved_session_id,
+                        question=question,
+                        generated=generated,
+                        guarded_sql="UNANSWERABLE",
+                        syntax_valid=False,
+                        warnings=warnings,
+                        rows=[],
+                        explain=[],
+                        elapsed_ms=0,
+                        stage_latencies_ms=stage_latencies_ms,
+                        llm_token_usage=self._sum_token_usage(llm_usages),
+                        reasoning=reasoning,
+                        linking_meta=linking_artifacts.context,
+                        constraint_meta=constraint_meta,
+                        request_context=request_context,
+                        prompt_context=request_context.prompt_for_validation(),
+                        trace=trace,
+                    )
+                    with trace.timer("history_audit_ms"):
+                        self.history.append(
+                            HistoryItem(
+                                query_id=response.query_id,
+                                connection_id=response.connection_id,
+                                session_id=response.session_id,
+                                question=question,
+                                sql=response.sql,
+                                explanation=response.explanation,
+                                confidence=response.confidence,
+                                signals=response.signals,
+                                warnings=response.warnings,
+                                results=response.results,
+                                execution_meta=response.execution_meta,
+                                reasoning=response.reasoning,
+                                linking_meta=response.linking_meta,
+                                constraint_meta=response.constraint_meta,
+                                feedback=None,
+                            )
+                        )
+                        log_intermediate_trace(
+                            {
+                                "query_id": query_id,
+                                "connection_id": resolved_connection_id,
+                                "session_id": resolved_session_id,
+                                "schema_fingerprint": schema_fingerprint,
+                                "question": question,
+                                "severe_fail_fast": severe_fail_fast,
+                                "alt_skipped_easy": alt_skipped_easy,
+                                "multi_query_skipped_easy": True,
+                                "join_grounding_violation": False,
+                                "post_generation_constraint_unanswerable": post_generation_constraint_unanswerable,
+                                "constraint_violation_type": constraint_meta.violation_type,
+                                "ast_reason_codes": ast_analysis.reason_codes,
+                                "sql": response.sql,
+                                "failure_classification": response.execution_meta.failure_classification,
+                            }
+                        )
+                    return self._complete_response(response, trace, previous_observer, trace_token)
             if self.settings.constrained_sql_enabled and self.settings.constrained_sql_strict_identifiers:
                 constraint_meta = validate_sql_identifiers(
                     guarded_sql,

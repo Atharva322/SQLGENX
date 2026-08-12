@@ -21,6 +21,7 @@ sentence-transformers==2.3.1
 pandas==2.2.0
 numpy==1.26.3
 sqlparse==0.4.4
+sqlglot==25.34.1
 
 # API & Web
 streamlit==1.31.0

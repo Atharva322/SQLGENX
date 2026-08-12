@@ -57,6 +57,9 @@ class ExecutionMeta(BaseModel):
     risk_score: float = 0.0
     risk_classifier_version: str = ""
     risk_signals: dict[str, Any] = Field(default_factory=dict)
+    ast_valid: bool | None = None
+    ast_fingerprint: str | None = None
+    ast_reason_codes: list[str] = Field(default_factory=list)
     timeout_stage: str | None = None
     failure_stage: str | None = None
     llm_token_usage: dict[str, Any] = Field(default_factory=dict)

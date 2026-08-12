@@ -21,6 +21,7 @@ logs/
 # Data and artifacts
 *.sqlite
 *.db
+.tmp/
 coverage.xml
 htmlcov/
 benchmarks/results/
@@ -33,6 +34,7 @@ Thumbs.db
 
 # Node leftovers (if any)
 node_modules/
+.next/
 
 evals/latest_eval_snapshot.json
 
