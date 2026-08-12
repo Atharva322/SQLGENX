@@ -238,6 +238,7 @@ def run_schema_linking(
     feedback_examples: list[dict[str, Any]],
     top_k_schema: int,
     top_k_examples: int,
+    connection_id: str | None = None,
 ) -> SchemaLinkingArtifacts:
     settings = get_settings()
     normalized = _normalize_question(question)
@@ -252,10 +253,11 @@ def run_schema_linking(
         # Use existing retriever for coarse selection before scoring/linking.
         rag = retrieve_context(
             question=normalized,
-            schema={"tables": tables},
+            schema={"tables": tables, "schema_fingerprint": schema_fingerprint},
             feedback_examples=feedback_examples,
             top_k_schema=top_k_schema,
             top_k_examples=top_k_examples,
+            connection_id=connection_id,
         )
         selected_schema = rag.selected_schema_tables
         selected_examples = rag.selected_examples

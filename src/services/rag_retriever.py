@@ -5,6 +5,9 @@ from typing import Any
 import numpy as np
 
 from src.config.settings import get_settings
+from src.context.documents import schema_source_fingerprint
+from src.context.index import ContextIndex
+from src.db.schema_introspector import compute_schema_fingerprint
 
 
 STOPWORDS = {
@@ -45,6 +48,7 @@ class RetrievalRanking:
 
 
 _model_cache: dict[str, Any | None] = {}
+_context_index_ready_keys: set[tuple[str, str, str, str, str, str, int]] = set()
 
 
 def _tokenize(text: str) -> set[str]:
@@ -74,7 +78,7 @@ def _cosine_similarity(vec_a: np.ndarray, vec_b: np.ndarray) -> float:
 
 def _load_embedding_model() -> Any | None:
     settings = get_settings()
-    model_name = settings.rag_embedding_model.strip()
+    model_name = getattr(settings, "rag_embedding_model", "").strip()
     if not model_name:
         return None
     if model_name in _model_cache:
@@ -84,7 +88,7 @@ def _load_embedding_model() -> Any | None:
 
         model = SentenceTransformer(
             model_name,
-            local_files_only=bool(settings.rag_embedding_local_only),
+            local_files_only=bool(getattr(settings, "rag_embedding_local_only", True)),
         )
         _model_cache[model_name] = model
         return model
@@ -182,7 +186,19 @@ def retrieve_context(
     feedback_examples: list[dict[str, Any]],
     top_k_schema: int,
     top_k_examples: int,
+    connection_id: str | None = None,
 ) -> RetrievalResult:
+    indexed = _retrieve_from_context_index(
+        question=question,
+        schema=schema,
+        feedback_examples=feedback_examples,
+        top_k_schema=top_k_schema,
+        top_k_examples=top_k_examples,
+        connection_id=connection_id,
+    )
+    if indexed is not None:
+        return indexed
+
     schema_tables = list(schema.get("tables", []))
     ranking = rank_context_candidates(question, schema, feedback_examples)
     schema_idxs = ranking.schema_ranked_indices[: min(top_k_schema, len(schema_tables))]
@@ -213,4 +229,107 @@ def retrieve_context(
             "schema_candidates": len(schema_tables),
             "example_candidates": len(feedback_examples),
         },
+    )
+
+
+def _retrieve_from_context_index(
+    question: str,
+    schema: dict[str, Any],
+    feedback_examples: list[dict[str, Any]],
+    top_k_schema: int,
+    top_k_examples: int,
+    connection_id: str | None,
+) -> RetrievalResult | None:
+    settings = get_settings()
+    if not getattr(settings, "context_index_enabled", False):
+        return None
+
+    schema_tables = list(schema.get("tables", []))
+    schema_by_name = {str(table.get("table", "")): table for table in schema_tables}
+    schema_fingerprint = schema.get("schema_fingerprint") or compute_schema_fingerprint(schema)
+    resolved_connection_id = connection_id or "default"
+    try:
+        index_path = getattr(settings, "context_index_path", ".tmp/context_index.sqlite3")
+        embedding_model = getattr(settings, "context_index_embedding_model", "deterministic-hash-v1")
+        chunking_version = getattr(settings, "context_index_chunking_version", "schema-doc-v1")
+        rrf_k = int(getattr(settings, "context_index_rrf_k", 60))
+        index = ContextIndex(
+            path=index_path,
+            embedding_model=embedding_model,
+            chunking_version=chunking_version,
+            retrieval_config={"rrf_k": rrf_k},
+        )
+        ready_key = (
+            str(index_path),
+            resolved_connection_id,
+            schema_fingerprint,
+            schema_source_fingerprint(schema),
+            embedding_model,
+            chunking_version,
+            rrf_k,
+        )
+        if ready_key in _context_index_ready_keys:
+            status = index.status(resolved_connection_id, schema_fingerprint)
+        else:
+            status = index.refresh_if_stale(
+                connection_id=resolved_connection_id,
+                schema_fingerprint=schema_fingerprint,
+                schema=schema,
+                feedback_examples=[],
+            )
+            _context_index_ready_keys.add(ready_key)
+        hits, meta = index.retrieve(
+            question=question,
+            connection_id=resolved_connection_id,
+            schema_fingerprint=schema_fingerprint,
+            top_k_schema=top_k_schema,
+            top_k_examples=0,
+        )
+    except Exception as exc:
+        return RetrievalResult(
+            selected_schema_tables=schema_tables[:top_k_schema],
+            selected_examples=feedback_examples[:top_k_examples],
+            retrieval_meta={
+                "mode": "context_index_fallback",
+                "schema_method": "fallback",
+                "example_method": "fallback",
+                "fallback_reason": exc.__class__.__name__,
+                "schema_candidates": len(schema_tables),
+                "example_candidates": len(feedback_examples),
+            },
+        )
+
+    schema_hits = [hit for hit in hits if hit.kind == "schema"]
+    selected_schema = [
+        schema_by_name[hit.table_name]
+        for hit in schema_hits
+        if hit.table_name and hit.table_name in schema_by_name
+    ]
+    example_docs = [_example_doc(example) for example in feedback_examples]
+    example_ranked = _rank_by_lexical(question, example_docs)
+    selected_example_scores = example_ranked[: min(top_k_examples, len(example_ranked))]
+    example_idxs = [idx for idx, _ in selected_example_scores]
+    example_method = "lexical_fallback"
+    example_score = round(
+        float(sum(score for _, score in selected_example_scores) / max(1, len(selected_example_scores))),
+        3,
+    )
+    selected_examples = [feedback_examples[idx] for idx in example_idxs] if example_idxs else []
+    if not selected_schema:
+        selected_schema = schema_tables[:top_k_schema]
+    meta.update(
+        {
+            "index_document_count": status.document_count,
+            "index_schema_document_count": status.schema_document_count,
+            "index_example_document_count": status.example_document_count,
+            "index_stale": status.stale,
+            "example_method": example_method,
+            "example_avg_score": example_score,
+            "example_candidates": len(feedback_examples),
+        }
+    )
+    return RetrievalResult(
+        selected_schema_tables=selected_schema[:top_k_schema],
+        selected_examples=selected_examples[:top_k_examples],
+        retrieval_meta=meta,
     )

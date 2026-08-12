@@ -73,6 +73,15 @@ class Settings(BaseSettings):
     schema_cache_max_entries: int = Field(default=32, alias="SCHEMA_CACHE_MAX_ENTRIES")
     prompt_asset_cache_enabled: bool = Field(default=True, alias="PROMPT_ASSET_CACHE_ENABLED")
     prompt_asset_cache_max_entries: int = Field(default=32, alias="PROMPT_ASSET_CACHE_MAX_ENTRIES")
+    context_index_enabled: bool = Field(default=False, alias="CONTEXT_INDEX_ENABLED")
+    context_index_path: str = Field(default=".tmp/context_index.sqlite3", alias="CONTEXT_INDEX_PATH")
+    context_index_embedding_model: str = Field(
+        default="deterministic-hash-v1", alias="CONTEXT_INDEX_EMBEDDING_MODEL"
+    )
+    context_index_chunking_version: str = Field(
+        default="schema-doc-v1", alias="CONTEXT_INDEX_CHUNKING_VERSION"
+    )
+    context_index_rrf_k: int = Field(default=60, alias="CONTEXT_INDEX_RRF_K")
 
     api_host: str = Field(default="0.0.0.0", alias="API_HOST")
     api_port: int = Field(default=8000, alias="API_PORT")

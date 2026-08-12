@@ -533,6 +533,7 @@ class QueryService:
                 feedback_examples=scoped_feedback,
                 top_k_schema=self.settings.rag_top_k_schema,
                 top_k_examples=self.settings.rag_top_k_examples,
+                connection_id=resolved_connection_id,
             )
             trace.set_cache_state(
                 "retrieval",
