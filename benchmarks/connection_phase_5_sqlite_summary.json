@@ -1,0 +1,69 @@
+{
+  "phase": "connection_phase_5_sqlite",
+  "branch": "feature/connection-phase-5-sqlite",
+  "adapter": {
+    "key": "sqlite",
+    "display_name": "SQLite",
+    "release_state": "experimental",
+    "driver": "sqlite",
+    "sqlglot_dialect": "sqlite",
+    "supported_versions": ["3.x"],
+    "capabilities": {
+      "read_only_execution": true,
+      "schema_introspection": true,
+      "explain": true,
+      "row_limit": true,
+      "supports_tls": false
+    }
+  },
+  "implemented": [
+    "SQLite connection config using database as the local file path plus safe local defaults.",
+    "SQLITE_ALLOWED_DIRECTORY setting and adapter-side path allowlist enforcement.",
+    "Rejection for :memory:, paths outside the allowed directory, invalid suffixes, and missing parent directories.",
+    "SQLite adapter URL construction, engine options, schema inspection, PRAGMA query_only read-only mode, and EXPLAIN QUERY PLAN.",
+    "Runtime adapter selection for SQLite while keeping the adapter experimental and hidden from the default catalog.",
+    "SQLite tests for config coercion, path policy, schema inspection, explain, and read-only write rejection."
+  ],
+  "local_evidence": [
+    {
+      "gate": "focused_adapter_and_dialect_tests",
+      "command": ".venv\\Scripts\\python.exe -m pytest tests/test_connection_adapters.py tests/test_ast_sql_validation.py -q",
+      "status": "passed",
+      "result": "23 passed"
+    },
+    {
+      "gate": "backend_fast",
+      "command": ".venv\\Scripts\\python.exe -m pytest -q -m \"not integration and not live\"",
+      "status": "passed",
+      "result": "108 passed, 3 deselected"
+    },
+    {
+      "gate": "python_static",
+      "command": ".venv\\Scripts\\python.exe -m compileall src tests evals benchmarks",
+      "status": "passed"
+    },
+    {
+      "gate": "frontend_types",
+      "command": "npx tsc --noEmit",
+      "status": "passed"
+    }
+  ],
+  "blocked_or_deferred": [
+    {
+      "gate": "hosted_path_security_model",
+      "status": "deferred",
+      "reason": "SQLite remains local/development-first. Hosted deployments need an explicitly mounted and isolated allowed directory before promotion."
+    },
+    {
+      "gate": "sqlite_eval_matrix",
+      "status": "deferred",
+      "reason": "Adapter promotion needs a SQLite fixture/eval matrix covering typing, date functions, JSON availability, attached DB behavior, and concurrency."
+    },
+    {
+      "gate": "normal_ui_exposure",
+      "status": "blocked",
+      "reason": "SQLite is intentionally hidden from the normal Add Connection flow while experimental."
+    }
+  ],
+  "release_recommendation": "Keep SQLite experimental; expose only through server-side experimental catalog opt-in."
+}

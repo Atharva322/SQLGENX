@@ -92,5 +92,24 @@ def default_adapter_registry() -> AdapterRegistry:
                     ),
                 ),
             ),
+            AdapterInfo(
+                key="sqlite",
+                display_name="SQLite",
+                release_state="experimental",
+                sqlglot_dialect="sqlite",
+                driver_name="sqlite",
+                default_port=None,
+                supported_server_versions=("3.x",),
+                capabilities=AdapterCapability(
+                    read_only_execution=True,
+                    schema_introspection=True,
+                    explain=True,
+                    row_limit=True,
+                    supports_tls=False,
+                    notes=(
+                        "Experimental Phase 5 local/development adapter; file paths must stay inside SQLITE_ALLOWED_DIRECTORY.",
+                    ),
+                ),
+            ),
         ]
     )

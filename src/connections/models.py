@@ -57,11 +57,21 @@ class SQLServerConnectionConfig(BaseModel):
     trust_server_certificate: bool = False
 
 
-ConnectionConfig = PostgresConnectionConfig | MySQLConnectionConfig | SQLServerConnectionConfig
+class SQLiteConnectionConfig(BaseModel):
+    host: str = Field(default="localhost", min_length=1, max_length=255)
+    port: int = Field(default=1, ge=1, le=65535)
+    database: str = Field(min_length=1, max_length=512)
+    username: str = Field(default="sqlite", min_length=1, max_length=128)
+    password: str = Field(default="sqlite-local", min_length=1, max_length=1024)
+    tls_mode: Literal["disable"] = "disable"
+    read_only: bool = True
+
+
+ConnectionConfig = PostgresConnectionConfig | MySQLConnectionConfig | SQLServerConnectionConfig | SQLiteConnectionConfig
 
 
 class ConnectionTestRequest(BaseModel):
-    adapter_key: Literal["postgresql", "mysql", "sqlserver"]
+    adapter_key: Literal["postgresql", "mysql", "sqlserver", "sqlite"]
     config: ConnectionConfig
 
     @model_validator(mode="before")
@@ -79,6 +89,8 @@ class ConnectionTestRequest(BaseModel):
             data["config"] = MySQLConnectionConfig(**config)
         elif adapter_key == "sqlserver":
             data["config"] = SQLServerConnectionConfig(**config)
+        elif adapter_key == "sqlite":
+            data["config"] = SQLiteConnectionConfig(**config)
         return data
 
 
@@ -200,6 +212,8 @@ def _adapter_key(url: URL) -> str:
         return "mysql"
     if driver in {"mssql", "sqlserver"}:
         return "sqlserver"
+    if driver == "sqlite":
+        return "sqlite"
     return driver
 
 
@@ -210,6 +224,8 @@ def _dialect(url: URL) -> str:
         return "mysql"
     if _adapter_key(url) == "sqlserver":
         return "tsql"
+    if _adapter_key(url) == "sqlite":
+        return "sqlite"
     return url.drivername.split("+", 1)[0]
 
 
