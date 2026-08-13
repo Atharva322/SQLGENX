@@ -8,6 +8,7 @@ from sqlalchemy import create_engine
 from src.adapters.mysql import mysql_adapter
 from src.adapters.postgresql import postgresql_adapter
 from src.adapters.sqlserver import sqlserver_adapter
+from src.adapters.sqlite import sqlite_adapter
 from src.config.settings import get_settings
 from src.connections.models import (
     ConnectionCreateRequest,
@@ -187,6 +188,8 @@ class ConnectionService:
             return mysql_adapter
         if adapter_key == "sqlserver":
             return sqlserver_adapter
+        if adapter_key == "sqlite":
+            return sqlite_adapter
         raise ValueError(f"Unsupported adapter: {adapter_key}")
 
     def _failed_public(self, owner_id: str, request: ConnectionCreateRequest, result: ConnectionTestResponse) -> PublicConnection:
@@ -211,7 +214,7 @@ class ConnectionService:
 
 
 def record_to_config(record: StoredConnection, password: str):
-    from src.connections.models import MySQLConnectionConfig, PostgresConnectionConfig, SQLServerConnectionConfig
+    from src.connections.models import MySQLConnectionConfig, PostgresConnectionConfig, SQLiteConnectionConfig, SQLServerConnectionConfig
 
     payload = {
         "host": record.host,
@@ -225,6 +228,8 @@ def record_to_config(record: StoredConnection, password: str):
         return MySQLConnectionConfig(**payload)
     if record.adapter_key == "sqlserver":
         return SQLServerConnectionConfig(**payload)
+    if record.adapter_key == "sqlite":
+        return SQLiteConnectionConfig(**payload)
     return PostgresConnectionConfig(**payload)
 
 

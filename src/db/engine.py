@@ -54,6 +54,9 @@ def _build_engine_kwargs(database_url: str) -> dict:
         connect_args["connect_timeout"] = _settings.db_connect_timeout_seconds
     if drivername.startswith("mysql"):
         connect_args["connect_timeout"] = _settings.db_connect_timeout_seconds
+    if drivername.startswith("sqlite"):
+        connect_args["check_same_thread"] = False
+        connect_args["timeout"] = float(_settings.db_connect_timeout_seconds)
     if connect_args:
         kwargs["connect_args"] = connect_args
     return kwargs
@@ -70,6 +73,8 @@ def connection_adapter_key(connection_id: str | None, owner_id: str | None = Non
             return "mysql"
         if driver in {"mssql", "sqlserver"}:
             return "sqlserver"
+        if driver == "sqlite":
+            return "sqlite"
         return driver
     if owner_id:
         from src.connections.service import get_connection_service

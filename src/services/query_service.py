@@ -13,6 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from src.adapters.mysql import mysql_adapter
 from src.adapters.postgresql import postgresql_adapter
 from src.adapters.sqlserver import sqlserver_adapter
+from src.adapters.sqlite import sqlite_adapter
 from src.config.settings import get_settings
 from src.connections.models import ConnectionNotFoundError, PublicConnection
 from src.connections.repository import LegacyEnvConnectionRepository
@@ -305,6 +306,8 @@ class QueryService:
             return mysql_adapter
         if adapter_key == "sqlserver":
             return sqlserver_adapter
+        if adapter_key == "sqlite":
+            return sqlite_adapter
         return postgresql_adapter
 
     def _schema_coverage_score(

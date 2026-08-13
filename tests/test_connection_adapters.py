@@ -1,17 +1,25 @@
 from __future__ import annotations
 
+from pathlib import Path
+import shutil
+from uuid import uuid4
+
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, text
 
 from src.adapters.base import AdapterCapability, AdapterInfo
 from src.adapters.registry import AdapterRegistry, AdapterRegistryError
+from src.adapters.sqlite import sqlite_adapter
 from src.adapters.sqlserver import sqlserver_adapter
 from src.api.main import app
+from src.config.settings import get_settings
 from src.connections.models import (
     ConnectionNotFoundError,
     ConnectionTestRequest,
     MySQLConnectionConfig,
     PostgresConnectionConfig,
+    SQLiteConnectionConfig,
     SQLServerConnectionConfig,
     public_connection_from_url,
 )
@@ -134,7 +142,7 @@ def test_adapters_endpoint_requires_server_side_experimental_gate(monkeypatch) -
     get_settings.cache_clear()
 
     assert dev_response.status_code == 200
-    assert {item["key"] for item in dev_response.json()["adapters"]} == {"postgresql", "mysql", "sqlserver"}
+    assert {item["key"] for item in dev_response.json()["adapters"]} == {"postgresql", "mysql", "sqlserver", "sqlite"}
 
 
 def test_sqlserver_adapter_builds_odbc_url_without_leaking_in_public_catalog() -> None:
@@ -180,3 +188,69 @@ def test_connection_config_is_coerced_by_adapter_key_defaults() -> None:
     assert isinstance(sqlserver.config, SQLServerConnectionConfig)
     assert sqlserver.config.port == 1433
     assert sqlserver.config.odbc_driver == "ODBC Driver 18 for SQL Server"
+
+    sqlite = ConnectionTestRequest(
+        adapter_key="sqlite",
+        config={"database": "local.sqlite3"},
+    )
+    assert isinstance(sqlite.config, SQLiteConnectionConfig)
+    assert sqlite.config.host == "localhost"
+    assert sqlite.config.port == 1
+    assert sqlite.config.read_only is True
+
+
+def _workspace_sqlite_allowed_dir() -> Path:
+    allowed = Path(".tmp") / "sqlite-tests" / uuid4().hex
+    allowed.mkdir(parents=True)
+    return allowed.resolve()
+
+
+def test_sqlite_adapter_enforces_allowed_directory(monkeypatch) -> None:
+    allowed = _workspace_sqlite_allowed_dir()
+    monkeypatch.setenv("SQLITE_ALLOWED_DIRECTORY", str(allowed))
+    get_settings.cache_clear()
+
+    inside = SQLiteConnectionConfig(database="reports.sqlite3")
+    outside = SQLiteConnectionConfig(database=str(allowed.parent / "outside.sqlite3"))
+    bad_suffix = SQLiteConnectionConfig(database="reports.txt")
+
+    try:
+        url = sqlite_adapter.build_url(inside)
+
+        assert url.startswith("sqlite:///")
+        assert "reports.sqlite3" in url
+        with pytest.raises(ValueError, match="outside SQLITE_ALLOWED_DIRECTORY"):
+            sqlite_adapter.validate_config(outside)
+        with pytest.raises(ValueError, match="must end"):
+            sqlite_adapter.validate_config(bad_suffix)
+    finally:
+        get_settings.cache_clear()
+        shutil.rmtree(allowed, ignore_errors=True)
+
+
+def test_sqlite_adapter_inspects_explains_and_enforces_query_only(monkeypatch) -> None:
+    allowed = _workspace_sqlite_allowed_dir()
+    db_path = allowed / "reports.sqlite3"
+    monkeypatch.setenv("SQLITE_ALLOWED_DIRECTORY", str(allowed))
+    get_settings.cache_clear()
+    config = SQLiteConnectionConfig(database=str(db_path))
+
+    engine = create_engine(sqlite_adapter.build_url(config), **sqlite_adapter.engine_options(5, 10, 1800))
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("CREATE TABLE departments (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"))
+            conn.execute(text("INSERT INTO departments (name) VALUES ('Engineering')"))
+
+        schema = sqlite_adapter.inspect_schema(engine)
+        with engine.connect() as conn:
+            sqlite_adapter.configure_read_only(conn)
+            plan = sqlite_adapter.explain(conn, "SELECT name FROM departments")
+            with pytest.raises(Exception):
+                conn.execute(text("INSERT INTO departments (name) VALUES ('Sales')"))
+    finally:
+        engine.dispose()
+        get_settings.cache_clear()
+        shutil.rmtree(allowed, ignore_errors=True)
+
+    assert "departments" in {table["table"] for table in schema["tables"]}
+    assert plan
