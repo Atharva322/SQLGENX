@@ -68,6 +68,8 @@ def connection_adapter_key(connection_id: str | None, owner_id: str | None = Non
             return "postgresql"
         if driver in {"mysql", "mariadb"}:
             return "mysql"
+        if driver in {"mssql", "sqlserver"}:
+            return "sqlserver"
         return driver
     if owner_id:
         from src.connections.service import get_connection_service

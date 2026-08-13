@@ -73,5 +73,24 @@ def default_adapter_registry() -> AdapterRegistry:
                     notes=("Verified through Phase 3 MySQL integration gates.",),
                 ),
             ),
+            AdapterInfo(
+                key="sqlserver",
+                display_name="SQL Server",
+                release_state="experimental",
+                sqlglot_dialect="tsql",
+                driver_name="pyodbc",
+                default_port=1433,
+                supported_server_versions=("2019", "2022", "Azure SQL Database"),
+                capabilities=AdapterCapability(
+                    read_only_execution=False,
+                    schema_introspection=True,
+                    explain=True,
+                    row_limit=True,
+                    supports_tls=True,
+                    notes=(
+                        "Experimental Phase 4 adapter; requires real SQL Server CI and permission-scoped read-only execution before verification.",
+                    ),
+                ),
+            ),
         ]
     )
