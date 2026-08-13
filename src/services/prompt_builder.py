@@ -248,6 +248,7 @@ def build_query_plan_draft(
 def build_prompt(
     question: str,
     connection_id: str | None = None,
+    dialect: str = "postgres",
     schema: dict | None = None,
     scoped_feedback: list[dict] | None = None,
     linking_context: LinkingContext | None = None,
@@ -353,6 +354,7 @@ def build_prompt(
 
     return (
         "You are a SQL assistant. Generate safe read-only SQL only.\n"
+        f"SQL dialect: {dialect}.\n"
         "Rules:\n"
         "1) Use ONLY the table and column names listed in the schema section.\n"
         "2) If required table/column is not present, return SQL exactly as UNANSWERABLE.\n"

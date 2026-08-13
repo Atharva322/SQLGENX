@@ -7,6 +7,8 @@ pydantic-settings==2.1.0
 # Database
 sqlalchemy==2.0.25
 psycopg2-binary==2.9.9
+PyMySQL==1.1.1
+cryptography==42.0.8
 duckdb==0.10.0
 alembic==1.13.1
 

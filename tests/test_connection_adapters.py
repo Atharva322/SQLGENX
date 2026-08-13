@@ -79,7 +79,7 @@ def test_adapter_registry_filters_release_states() -> None:
                 display_name="MySQL",
                 release_state="experimental",
                 sqlglot_dialect="mysql",
-                driver_name="mysql2",
+                driver_name="pymysql",
                 default_port=3306,
             ),
         ]
@@ -108,11 +108,11 @@ def test_adapters_endpoint_exposes_verified_by_default() -> None:
 
     default_response = client.get("/v1/adapters")
     assert default_response.status_code == 200
-    assert [item["key"] for item in default_response.json()["adapters"]] == ["postgresql"]
+    assert [item["key"] for item in default_response.json()["adapters"]] == ["mysql", "postgresql"]
 
     dev_response = client.get("/v1/adapters?include_experimental=true")
     assert dev_response.status_code == 200
-    assert [item["key"] for item in dev_response.json()["adapters"]] == ["postgresql"]
+    assert [item["key"] for item in dev_response.json()["adapters"]] == ["mysql", "postgresql"]
 
 
 def test_adapters_endpoint_requires_server_side_experimental_gate(monkeypatch) -> None:

@@ -84,7 +84,7 @@ export interface AdapterCatalogItem {
   capabilities: Record<string, unknown>;
 }
 
-export interface PostgresConnectionConfig {
+export interface RuntimeConnectionConfig {
   host: string;
   port: number;
   database: string;
@@ -92,6 +92,8 @@ export interface PostgresConnectionConfig {
   password: string;
   tlsMode: "disable" | "prefer" | "require" | "verify-ca" | "verify-full";
 }
+
+export type RuntimeAdapterKey = "postgresql" | "mysql";
 
 export interface ConnectionTestResult {
   ok: boolean;

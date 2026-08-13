@@ -9,7 +9,7 @@ from sqlglot import exp
 from sqlglot.optimizer.scope import Scope, traverse_scope
 
 
-POSTGRES_DIALECT = "postgres"
+DEFAULT_DIALECT = "postgres"
 
 
 @dataclass(frozen=True)
@@ -36,10 +36,11 @@ def analyze_sql_ast(
     sql: str,
     schema: dict[str, Any],
     *,
+    dialect: str = DEFAULT_DIALECT,
     allow_select_star: bool = True,
 ) -> AstSqlAnalysis:
     try:
-        statements = [stmt for stmt in sqlglot.parse(sql, read=POSTGRES_DIALECT) if stmt]
+        statements = [stmt for stmt in sqlglot.parse(sql, read=dialect) if stmt]
     except sqlglot.errors.ParseError as exc:
         return _invalid("parse_failed", f"AST parser failed closed: {exc}")
     except Exception as exc:
@@ -54,7 +55,7 @@ def analyze_sql_ast(
     if list(root.find_all(exp.Insert, exp.Update, exp.Delete, exp.Drop, exp.Create)):
         return _invalid("writable_ast_node", "AST validation found a writable SQL node.")
 
-    normalized = root.sql(dialect=POSTGRES_DIALECT, pretty=False, normalize=True)
+    normalized = root.sql(dialect=dialect, pretty=False, normalize=True)
     schema_index = _schema_index(schema)
     cte_outputs = _cte_outputs(root)
     table_refs = _table_references(root, cte_outputs)
@@ -68,20 +69,20 @@ def analyze_sql_ast(
             reasons.append(f"unknown_table:{table}")
 
     columns = _column_references(root)
-    reasons.extend(_schema_validation_reasons(root, schema_index, cte_outputs, allow_select_star))
+    reasons.extend(_schema_validation_reasons(root, schema_index, cte_outputs, allow_select_star, dialect))
 
     warnings.extend(f"AST validation blocked {reason}." for reason in sorted(set(reasons)))
     set_ops = _set_operations(root)
     aggregations = _aggregations(root)
-    predicates = [node.sql(dialect=POSTGRES_DIALECT, pretty=False) for node in root.find_all(exp.Where)]
-    predicates.extend(node.sql(dialect=POSTGRES_DIALECT, pretty=False) for node in root.find_all(exp.Having))
+    predicates = [node.sql(dialect=dialect, pretty=False) for node in root.find_all(exp.Where)]
+    predicates.extend(node.sql(dialect=dialect, pretty=False) for node in root.find_all(exp.Having))
     orderings = [
-        node.sql(dialect=POSTGRES_DIALECT, pretty=False)
+        node.sql(dialect=dialect, pretty=False)
         for order in root.find_all(exp.Order)
         for node in order.expressions
     ]
     groupings = [
-        node.sql(dialect=POSTGRES_DIALECT, pretty=False)
+        node.sql(dialect=dialect, pretty=False)
         for group in root.find_all(exp.Group)
         for node in group.expressions
     ]
@@ -94,7 +95,7 @@ def analyze_sql_ast(
         aliases=aliases,
         columns=columns,
         joins=[
-            join.this.sql(dialect=POSTGRES_DIALECT, pretty=False)
+            join.this.sql(dialect=dialect, pretty=False)
             for join in root.find_all(exp.Join)
             if join.this is not None
         ],
@@ -114,13 +115,13 @@ def sql_fingerprint(normalized_sql: str) -> str:
     return hashlib.sha256(normalized_sql.encode("utf-8")).hexdigest()[:16]
 
 
-def are_semantically_duplicate(sql_a: str, sql_b: str) -> bool:
+def are_semantically_duplicate(sql_a: str, sql_b: str, *, dialect: str = DEFAULT_DIALECT) -> bool:
     try:
-        a = sqlglot.parse_one(sql_a, read=POSTGRES_DIALECT).sql(
-            dialect=POSTGRES_DIALECT, pretty=False, normalize=True
+        a = sqlglot.parse_one(sql_a, read=dialect).sql(
+            dialect=dialect, pretty=False, normalize=True
         )
-        b = sqlglot.parse_one(sql_b, read=POSTGRES_DIALECT).sql(
-            dialect=POSTGRES_DIALECT, pretty=False, normalize=True
+        b = sqlglot.parse_one(sql_b, read=dialect).sql(
+            dialect=dialect, pretty=False, normalize=True
         )
     except Exception:
         return False
@@ -192,16 +193,20 @@ def _schema_validation_reasons(
     schema_index: dict[str, set[str]],
     cte_outputs: dict[str, set[str]],
     allow_select_star: bool,
+    dialect: str,
 ) -> list[str]:
     reasons: list[str] = []
     for scope in traverse_scope(root):
         source_columns = _scope_source_columns(scope, schema_index, cte_outputs)
         source_names = set(source_columns)
+        output_aliases = _select_output_aliases(scope.expression)
 
         for column in scope.columns:
             table_part = _normalize_name(str(column.table or ""))
             column_part = _normalize_name(column.name)
             if not column_part:
+                continue
+            if dialect == "mysql" and not table_part and column_part in output_aliases:
                 continue
             if column_part == "*":
                 if not allow_select_star:

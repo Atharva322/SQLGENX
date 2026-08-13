@@ -10,11 +10,13 @@ import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
+from src.adapters.mysql import mysql_adapter
+from src.adapters.postgresql import postgresql_adapter
 from src.config.settings import get_settings
 from src.connections.models import ConnectionNotFoundError, PublicConnection
 from src.connections.repository import LegacyEnvConnectionRepository
 from src.connections.service import DEMO_OWNER_ID
-from src.db.engine import available_connections, get_session_factory
+from src.db.engine import available_connections, connection_adapter_key, get_session_factory
 from src.db.schema_introspector import compute_schema_fingerprint, get_schema_summary
 from src.guardrails.rules import (
     apply_guardrails,
@@ -223,19 +225,23 @@ class QueryService:
         self, sql: str, connection_id: str, trace: RequestTrace | None = None, owner_id: str | None = None
     ) -> list[str]:
         SessionLocal = get_session_factory(connection_id, owner_id=owner_id or DEMO_OWNER_ID)
+        adapter = self._execution_adapter(connection_id, owner_id=owner_id or DEMO_OWNER_ID)
         with SessionLocal() as session:
-            session.execute(text("SET TRANSACTION READ ONLY"))
-            self._apply_postgres_statement_timeout(
-                session, float(getattr(self.settings, "explain_timeout_seconds", 5.0))
+            adapter.configure_read_only(session)
+            self._apply_statement_timeout(
+                session,
+                float(getattr(self.settings, "explain_timeout_seconds", 5.0)),
+                adapter_key=adapter.key,
             )
-            plan_result = session.execute(text(f"EXPLAIN {sql}"))
-            plan_lines: list[str] = []
-            for row in plan_result.fetchall():
-                plan_lines.append(" | ".join(str(value) for value in row))
+            plan_lines = adapter.explain(session, sql)
             session.rollback()
             return plan_lines
 
-    def _apply_postgres_statement_timeout(self, session, timeout_seconds: float) -> None:
+    def _apply_statement_timeout(self, session, timeout_seconds: float, adapter_key: str = "postgresql") -> None:
+        if adapter_key == "mysql":
+            timeout_ms = max(1, int(timeout_seconds * 1000))
+            session.execute(text(f"SET SESSION max_execution_time = {timeout_ms}"))
+            return
         timeout_ms = max(1, int(timeout_seconds * 1000))
         session.execute(
             text("SELECT set_config('statement_timeout', :timeout_ms, true)"),
@@ -255,21 +261,24 @@ class QueryService:
         explain_plan: list[str] = precomputed_explain or []
         rows_df = pd.DataFrame()
         SessionLocal = get_session_factory(connection_id, owner_id=owner_id or DEMO_OWNER_ID)
+        adapter = self._execution_adapter(connection_id, owner_id=owner_id or DEMO_OWNER_ID)
 
         try:
             with SessionLocal() as session:
-                session.execute(text("SET TRANSACTION READ ONLY"))
+                adapter.configure_read_only(session)
 
                 if not explain_plan:
-                    self._apply_postgres_statement_timeout(
-                        session, float(getattr(self.settings, "explain_timeout_seconds", 5.0))
+                    self._apply_statement_timeout(
+                        session,
+                        float(getattr(self.settings, "explain_timeout_seconds", 5.0)),
+                        adapter_key=adapter.key,
                     )
-                    plan_result = session.execute(text(f"EXPLAIN {sql}"))
-                    for row in plan_result.fetchall():
-                        explain_plan.append(" | ".join(str(value) for value in row))
+                    explain_plan.extend(adapter.explain(session, sql))
 
-                self._apply_postgres_statement_timeout(
-                    session, float(getattr(self.settings, "statement_timeout_seconds", 10.0))
+                self._apply_statement_timeout(
+                    session,
+                    float(getattr(self.settings, "statement_timeout_seconds", 10.0)),
+                    adapter_key=adapter.key,
                 )
                 result = session.execute(text(sql))
                 fetched_rows = result.fetchall()
@@ -285,6 +294,15 @@ class QueryService:
 
         elapsed_ms = int((perf_counter() - start) * 1000)
         return rows_df.to_dict(orient="records"), explain_plan, elapsed_ms
+
+    def _execution_adapter(self, connection_id: str, owner_id: str):
+        try:
+            adapter_key = connection_adapter_key(connection_id, owner_id=owner_id)
+        except TypeError:
+            adapter_key = "postgresql"
+        if adapter_key == "mysql":
+            return mysql_adapter
+        return postgresql_adapter
 
     def _schema_coverage_score(
         self,
@@ -732,6 +750,7 @@ class QueryService:
         max_rows = row_limit_override or self.settings.max_result_rows
         resolved_session_id = self._normalize_session_id(session_id)
         resolved_connection_id = self._normalize_connection_id(connection_id, owner_id=resolved_owner_id)
+        execution_adapter = self._execution_adapter(resolved_connection_id, owner_id=resolved_owner_id)
         query_id = self._new_query_id()
         trace = RequestTrace(request_id=query_id)
         stage_latencies_ms = trace.stage_durations_ms
@@ -747,6 +766,7 @@ class QueryService:
         request_context = QueryContext(
             question=question,
             connection_id=resolved_connection_id,
+            dialect=execution_adapter.sqlglot_dialect,
             schema=schema,
             schema_fingerprint=schema_fingerprint,
             trace=trace,
@@ -781,6 +801,7 @@ class QueryService:
             prompt = build_prompt(
                 question,
                 connection_id=resolved_connection_id,
+                dialect=request_context.dialect,
                 schema=request_context.schema,
                 scoped_feedback=scoped_feedback,
                 linking_context=linking_artifacts.context,
@@ -934,6 +955,7 @@ class QueryService:
                 final_prompt = build_prompt(
                     question,
                     connection_id=resolved_connection_id,
+                    dialect=request_context.dialect,
                     schema=request_context.schema,
                     scoped_feedback=scoped_feedback,
                     linking_context=linking_artifacts.context,
@@ -1118,6 +1140,7 @@ class QueryService:
                     ast_analysis = analyze_sql_ast(
                         guarded_sql,
                         request_context.schema,
+                        dialect=request_context.dialect,
                         allow_select_star=bool(
                             getattr(self.settings, "ast_allow_select_star", True)
                         ),

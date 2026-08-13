@@ -2,8 +2,9 @@ import type {
   AdapterCatalogItem,
   ConnectionTestResult,
   GenerateSqlResponse,
-  PostgresConnectionConfig,
   PublicConnection,
+  RuntimeAdapterKey,
+  RuntimeConnectionConfig,
   SchemaContext
 } from "@/lib/types/contracts";
 
@@ -76,11 +77,15 @@ export async function fetchAdapters(ownerId: string): Promise<AdapterCatalogItem
   }));
 }
 
-export async function testConnection(ownerId: string, config: PostgresConnectionConfig): Promise<ConnectionTestResult> {
+export async function testConnection(
+  ownerId: string,
+  adapterKey: RuntimeAdapterKey,
+  config: RuntimeConnectionConfig
+): Promise<ConnectionTestResult> {
   const response = await fetch(new URL("/v1/connections/test", genxsqlApiBaseUrl()), {
     method: "POST",
     headers: ownerHeaders(ownerId),
-    body: JSON.stringify({ adapter_key: "postgresql", config: toPostgresConfig(config) })
+    body: JSON.stringify({ adapter_key: adapterKey, config: toConnectionConfig(config) })
   });
   const data = await safeJson(response);
   if (!response.ok) {
@@ -95,9 +100,10 @@ export async function testConnection(ownerId: string, config: PostgresConnection
 
 export async function createConnection(
   ownerId: string,
+  adapterKey: RuntimeAdapterKey,
   id: string,
   displayName: string,
-  config: PostgresConnectionConfig
+  config: RuntimeConnectionConfig
 ): Promise<PublicConnection> {
   const response = await fetch(new URL("/v1/connections", genxsqlApiBaseUrl()), {
     method: "POST",
@@ -105,8 +111,8 @@ export async function createConnection(
     body: JSON.stringify({
       id,
       display_name: displayName,
-      adapter_key: "postgresql",
-      config: toPostgresConfig(config)
+      adapter_key: adapterKey,
+      config: toConnectionConfig(config)
     })
   });
   const data = await safeJson(response);
@@ -120,11 +126,11 @@ export async function updateConnection(
   ownerId: string,
   id: string,
   displayName: string,
-  config?: PostgresConnectionConfig
+  config?: RuntimeConnectionConfig
 ): Promise<PublicConnection> {
   const payload: Record<string, unknown> = { display_name: displayName };
   if (config) {
-    payload.config = toPostgresConfig(config);
+    payload.config = toConnectionConfig(config);
   }
   const response = await fetch(new URL(`/v1/connections/${encodeURIComponent(id)}`, genxsqlApiBaseUrl()), {
     method: "PATCH",
@@ -269,13 +275,14 @@ function mapConnection(connection: UpstreamConnection): PublicConnection {
   };
 }
 
-function toPostgresConfig(config: PostgresConnectionConfig): Record<string, unknown> {
+function toConnectionConfig(config: RuntimeConnectionConfig): Record<string, unknown> {
   return {
     host: config.host,
     port: config.port,
     database: config.database,
     username: config.username,
     password: config.password,
-    tls_mode: config.tlsMode
+    tls_mode: config.tlsMode,
+    charset: "utf8mb4"
   };
 }

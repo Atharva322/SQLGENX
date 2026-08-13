@@ -1,6 +1,26 @@
 import { test, expect } from "@playwright/test";
 
 test("loads NL to SQL assistant UI", async ({ page }) => {
+  await page.route("**/api/adapters", async (route) => {
+    await route.fulfill({
+      json: {
+        adapters: [
+          {
+            key: "mysql",
+            displayName: "MySQL / MariaDB",
+            releaseState: "verified",
+            capabilities: { readOnlyExecution: true, schemaIntrospection: true }
+          },
+          {
+            key: "postgresql",
+            displayName: "PostgreSQL",
+            releaseState: "verified",
+            capabilities: { readOnlyExecution: true, schemaIntrospection: true }
+          }
+        ]
+      }
+    });
+  });
   await page.route("**/api/connections", async (route) => {
     if (route.request().method() === "GET") {
       await route.fulfill({
@@ -22,12 +42,13 @@ test("loads NL to SQL assistant UI", async ({ page }) => {
       });
       return;
     }
+    const payload = route.request().postDataJSON() as { adapterKey?: string; id?: string; displayName?: string };
     await route.fulfill({
       json: {
-        id: "runtime_pg",
-        displayName: "Runtime PG",
-        adapterKey: "postgresql",
-        dialect: "postgres",
+        id: payload.id ?? "runtime_mysql",
+        displayName: payload.displayName ?? "Runtime MySQL",
+        adapterKey: payload.adapterKey ?? "mysql",
+        dialect: payload.adapterKey === "mysql" ? "mysql" : "postgres",
         verificationState: "verified",
         healthState: "healthy",
         version: 1,
@@ -68,10 +89,12 @@ test("loads NL to SQL assistant UI", async ({ page }) => {
   await expect(page.getByText("Enterprise NL to SQL Assistant")).toBeVisible();
   await expect(page.getByLabel("Connection")).toBeVisible();
   await expect(page.getByRole("button", { name: "Generate SQL" })).toBeVisible();
-  await expect(page.getByText("Add PostgreSQL Connection")).toBeVisible();
+  await expect(page.getByText("Add Connection", { exact: true })).toBeVisible();
 
-  await page.getByPlaceholder("Connection ID").fill("runtime_pg");
-  await page.getByPlaceholder("Display name").fill("Runtime PG");
+  await page.getByRole("combobox").nth(1).selectOption("mysql");
+  await expect(page.getByPlaceholder("Port")).toHaveValue("3306");
+  await page.getByPlaceholder("Connection ID").fill("runtime_mysql");
+  await page.getByPlaceholder("Display name").fill("Runtime MySQL");
   await page.getByPlaceholder("Password").fill("secret-value");
   await page.getByRole("button", { name: "Test Connection" }).click();
   await expect(page.getByText("test passed")).toBeVisible();

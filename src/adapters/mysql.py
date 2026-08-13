@@ -4,26 +4,24 @@ from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine, URL
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.connections.models import ConnectionErrorCode, PostgresConnectionConfig
+from src.connections.models import ConnectionErrorCode, MySQLConnectionConfig
 from src.db.engine import _safe_connection_error_code
 from src.db.schema_introspector import compute_schema_fingerprint
 
 
-class PostgreSQLAdapter:
-    key = "postgresql"
-    dialect = "postgres"
-    sqlglot_dialect = "postgres"
+class MySQLAdapter:
+    key = "mysql"
+    dialect = "mysql"
+    sqlglot_dialect = "mysql"
 
-    def validate_config(self, config: PostgresConnectionConfig) -> None:
-        # Pydantic validates the shape; this hook exists for adapter-owned rules.
-        return None
+    def validate_config(self, config: MySQLConnectionConfig) -> None:
+        if config.tls_mode in {"verify-ca", "verify-full"}:
+            raise ValueError("MySQL certificate verification modes require a CA bundle configuration.")
 
-    def build_url(self, config: PostgresConnectionConfig) -> str:
-        query = {}
-        if config.tls_mode:
-            query["sslmode"] = config.tls_mode
+    def build_url(self, config: MySQLConnectionConfig) -> str:
+        query = {"charset": getattr(config, "charset", "utf8mb4") or "utf8mb4"}
         return URL.create(
-            "postgresql",
+            "mysql+pymysql",
             username=config.username,
             password=config.password,
             host=config.host,
@@ -45,6 +43,9 @@ class PostgreSQLAdapter:
         try:
             with engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
+                version = str(conn.execute(text("SELECT VERSION()")).scalar_one_or_none() or "")
+                if not version:
+                    return False, "unsupported_version"
             return True, None
         except SQLAlchemyError as exc:
             return False, _safe_connection_error_code(str(exc))  # type: ignore[return-value]
@@ -74,11 +75,11 @@ class PostgreSQLAdapter:
         return summary
 
     def configure_read_only(self, connection) -> None:
-        connection.execute(text("SET TRANSACTION READ ONLY"))
+        connection.execute(text("SET SESSION TRANSACTION READ ONLY"))
 
     def explain(self, connection, sql: str) -> list[str]:
-        rows = connection.execute(text(f"EXPLAIN {sql}")).fetchall()
-        return [str(row[0]) for row in rows]
+        rows = connection.execute(text(f"EXPLAIN {sql}")).mappings().all()
+        return [" | ".join(f"{key}={value}" for key, value in row.items()) for row in rows]
 
 
-postgresql_adapter = PostgreSQLAdapter()
+mysql_adapter = MySQLAdapter()

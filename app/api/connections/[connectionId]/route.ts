@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireSession } from "@/lib/auth/session";
 import { deleteConnection, updateConnection } from "@/lib/genxsql-api";
-import type { PostgresConnectionConfig } from "@/lib/types/contracts";
+import type { RuntimeConnectionConfig } from "@/lib/types/contracts";
 
 const updateSchema = z.object({
   displayName: z.string().min(1),
@@ -28,7 +28,7 @@ export async function PATCH(req: Request, context: { params: Promise<{ connectio
         user.userId,
         params.connectionId,
         body.displayName,
-        body.config as PostgresConnectionConfig | undefined
+        body.config as RuntimeConnectionConfig | undefined
       )
     );
   } catch (error) {

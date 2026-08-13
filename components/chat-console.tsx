@@ -3,10 +3,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import type {
   ConnectionTestResult,
+  AdapterCatalogItem,
   ExecuteSqlResponse,
   GenerateSqlResponse,
-  PostgresConnectionConfig,
-  PublicConnection
+  PublicConnection,
+  RuntimeAdapterKey,
+  RuntimeConnectionConfig
 } from "@/lib/types/contracts";
 
 interface Message {
@@ -15,7 +17,7 @@ interface Message {
 }
 
 const PAGE_SIZE = 10;
-const DEFAULT_FORM: PostgresConnectionConfig = {
+const DEFAULT_FORM: RuntimeConnectionConfig = {
   host: "localhost",
   port: 5432,
   database: "sample_company",
@@ -55,8 +57,14 @@ export function ChatConsole(): React.JSX.Element {
   const [conversationId, setConversationId] = useState<string>();
   const [messages, setMessages] = useState<Message[]>([]);
   const [connections, setConnections] = useState<PublicConnection[]>([]);
+  const [adapters, setAdapters] = useState<AdapterCatalogItem[]>([]);
   const [selectedConnectionId, setSelectedConnectionId] = useState("default");
-  const [connectionForm, setConnectionForm] = useState({ id: "", displayName: "", ...DEFAULT_FORM });
+  const [connectionForm, setConnectionForm] = useState({
+    adapterKey: "postgresql" as RuntimeAdapterKey,
+    id: "",
+    displayName: "",
+    ...DEFAULT_FORM
+  });
   const [testedConfigKey, setTestedConfigKey] = useState<string>();
   const [testResult, setTestResult] = useState<ConnectionTestResult>();
   const [connectionBusy, setConnectionBusy] = useState(false);
@@ -80,6 +88,7 @@ export function ChatConsole(): React.JSX.Element {
     [connections, selectedConnectionId]
   );
   const configKey = JSON.stringify({
+    adapterKey: connectionForm.adapterKey,
     host: connectionForm.host,
     port: Number(connectionForm.port),
     database: connectionForm.database,
@@ -95,6 +104,9 @@ export function ChatConsole(): React.JSX.Element {
     testedConfigKey === configKey;
 
   useEffect(() => {
+    loadAdapters().catch(() => {
+      setAdapters([{ key: "postgresql", displayName: "PostgreSQL", releaseState: "verified", capabilities: {} }]);
+    });
     loadConnections().catch((err) => {
       setConnections([
         {
@@ -112,6 +124,15 @@ export function ChatConsole(): React.JSX.Element {
       setError(err instanceof Error ? err.message : "Failed to load connections.");
     });
   }, []);
+
+  async function loadAdapters(): Promise<void> {
+    const response = await fetch("/api/adapters", { cache: "no-store" });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error ?? "Failed to load adapters.");
+    }
+    setAdapters(Array.isArray(data.adapters) ? (data.adapters as AdapterCatalogItem[]) : []);
+  }
 
   async function loadConnections(nextSelectedId?: string): Promise<void> {
     const response = await fetch("/api/connections", { cache: "no-store" });
@@ -143,7 +164,7 @@ export function ChatConsole(): React.JSX.Element {
       const response = await fetch("/api/connections/test", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ config: connectionForm })
+        body: JSON.stringify({ adapterKey: connectionForm.adapterKey, config: connectionForm })
       });
       const data = await response.json();
       if (!response.ok) {
@@ -169,6 +190,7 @@ export function ChatConsole(): React.JSX.Element {
         body: JSON.stringify({
           id: connectionForm.id,
           displayName: connectionForm.displayName,
+          adapterKey: connectionForm.adapterKey,
           config: connectionForm
         })
       });
@@ -176,7 +198,7 @@ export function ChatConsole(): React.JSX.Element {
       if (!response.ok) {
         throw new Error(data.error ?? "Failed to save connection.");
       }
-      setConnectionForm({ id: "", displayName: "", ...DEFAULT_FORM });
+      setConnectionForm({ adapterKey: "postgresql", id: "", displayName: "", ...DEFAULT_FORM });
       setTestResult(undefined);
       setTestedConfigKey(undefined);
       await loadConnections((data as PublicConnection).id);
@@ -338,8 +360,25 @@ export function ChatConsole(): React.JSX.Element {
       </div>
 
       <div className="card stack">
-        <strong>Add PostgreSQL Connection</strong>
+        <strong>Add Connection</strong>
         <div className="form-grid">
+          <select
+            value={connectionForm.adapterKey}
+            onChange={(e) => {
+              setConnectionForm((form) => ({
+                ...form,
+                adapterKey: e.target.value as RuntimeAdapterKey,
+                port: e.target.value === "mysql" ? 3306 : 5432
+              }));
+              setTestResult(undefined);
+            }}
+          >
+            {adapters.map((adapter) => (
+              <option key={adapter.key} value={adapter.key}>
+                {adapter.displayName}
+              </option>
+            ))}
+          </select>
           <input
             placeholder="Connection ID"
             value={connectionForm.id}
@@ -398,7 +437,7 @@ export function ChatConsole(): React.JSX.Element {
           <select
             value={connectionForm.tlsMode}
             onChange={(e) => {
-              setConnectionForm((form) => ({ ...form, tlsMode: e.target.value as PostgresConnectionConfig["tlsMode"] }));
+              setConnectionForm((form) => ({ ...form, tlsMode: e.target.value as RuntimeConnectionConfig["tlsMode"] }));
               setTestResult(undefined);
             }}
           >

@@ -170,6 +170,7 @@ def test_prompt_includes_rag_metadata_when_enabled(monkeypatch) -> None:
     )
 
     prompt = prompt_builder.build_prompt("Show sales trends")
+    assert "SQL dialect: postgres." in prompt
     assert "RAG retrieval metadata" in prompt
     assert "- mode: embedding" in prompt
     assert "- schema retrieval: embedding" in prompt
@@ -224,3 +225,28 @@ def test_prompt_includes_query_plan_draft(monkeypatch) -> None:
     assert "Query plan draft" in prompt
     assert "- target_tables: sales" in prompt
     assert "- aggregations: SUM" in prompt
+
+
+def test_prompt_can_request_mysql_dialect(monkeypatch) -> None:
+    monkeypatch.setattr(
+        prompt_builder,
+        "get_settings",
+        lambda: SimpleNamespace(
+            rag_enabled=False,
+            rag_top_k_schema=2,
+            rag_top_k_examples=1,
+            rag_min_feedback_confidence=0.65,
+        ),
+    )
+    monkeypatch.setattr(
+        prompt_builder,
+        "get_schema_summary",
+        lambda connection_id=None: {
+            "tables": [{"table": "employees", "columns": [{"name": "name", "type": "VARCHAR"}]}],
+            "schema_fingerprint": "fp_mysql",
+        },
+    )
+
+    prompt = prompt_builder.build_prompt("List employees", connection_id="runtime_mysql", dialect="mysql")
+
+    assert "SQL dialect: mysql." in prompt

@@ -10,6 +10,7 @@ def test_history_filters_by_session(monkeypatch) -> None:
     from src.services.query_service import QueryService
 
     monkeypatch.setenv("LLM_PROVIDER", "deterministic")
+    monkeypatch.setenv("ASYNC_RUNTIME_ENABLED", "false")
     get_settings.cache_clear()
     monkeypatch.setattr(main, "service", QueryService())
     client = TestClient(app)
@@ -33,6 +34,7 @@ def test_feedback_endpoint_stores_verdict(monkeypatch) -> None:
     target_path = Path("logs") / "test_feedback_incorrect.jsonl"
     target_path.unlink(missing_ok=True)
     monkeypatch.setenv("LLM_PROVIDER", "deterministic")
+    monkeypatch.setenv("ASYNC_RUNTIME_ENABLED", "false")
     get_settings.cache_clear()
     monkeypatch.setattr(main, "service", QueryService())
     monkeypatch.setattr(
