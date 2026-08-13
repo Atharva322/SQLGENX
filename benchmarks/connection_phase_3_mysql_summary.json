@@ -1,0 +1,110 @@
+{
+  "phase": "connection_phase_3_mysql",
+  "branch": "feature/connection-phase-3-mysql",
+  "adapter": {
+    "key": "mysql",
+    "display_name": "MySQL / MariaDB",
+    "release_state": "verified",
+    "driver": "pymysql",
+    "supported_versions": ["8.0", "8.4", "10.6+ MariaDB"],
+    "capabilities": {
+      "read_only_execution": true,
+      "schema_introspection": true,
+      "explain": true,
+      "row_limit": true,
+      "supports_tls": true
+    }
+  },
+  "local_evidence": [
+    {
+      "gate": "python_static",
+      "command": ".venv\\Scripts\\python.exe -m compileall src tests evals benchmarks",
+      "status": "passed"
+    },
+    {
+      "gate": "backend_fast",
+      "command": ".venv\\Scripts\\python.exe -m pytest -q -m \"not integration and not live\"",
+      "status": "passed",
+      "result": "103 passed, 3 deselected"
+    },
+    {
+      "gate": "frontend_types",
+      "command": "npx tsc --noEmit",
+      "status": "passed"
+    },
+    {
+      "gate": "frontend_unit",
+      "command": "npm test -- --run",
+      "status": "passed",
+      "result": "3 files passed, 7 tests passed"
+    },
+    {
+      "gate": "frontend_build",
+      "command": "npm run build",
+      "status": "passed"
+    },
+    {
+      "gate": "frontend_e2e",
+      "command": "npm run test:e2e",
+      "status": "passed",
+      "result": "1 passed; MySQL adapter discovered and selected in Add Connection form"
+    },
+    {
+      "gate": "mysql_runtime_integration",
+      "command": "$env:MYSQL_TEST_URL='mysql+pymysql://text2sql_user:***@localhost:3307/sample_company?charset=utf8mb4'; .venv\\Scripts\\python.exe -m pytest tests/integration/test_runtime_mysql_connection_lifecycle.py -q -rs",
+      "status": "passed",
+      "result": "1 passed; lifecycle, schema, generation, validation, execution, owner isolation, update, delete"
+    },
+    {
+      "gate": "cross_dialect_golden",
+      "command": ".venv\\Scripts\\python.exe -m pytest tests/test_ast_sql_validation.py tests/test_prompt_builder_feedback.py tests/test_connection_adapters.py tests/test_runtime_connections_api.py -q",
+      "status": "passed",
+      "result": "25 passed; MySQL/PostgreSQL dialect validation and adapter catalog coverage"
+    },
+    {
+      "gate": "benchmark_eval_smoke",
+      "command": "$env:DATABASE_URL='postgresql://text2sql_user:***@localhost:55432/sample_company'; $env:CONNECTION_URLS_JSON='{}'; $env:LLM_PROVIDER='deterministic'; $env:LLM_MODEL='sqlgenx-fixture-v1'; $env:RAG_EMBEDDING_LOCAL_ONLY='true'; $env:SEMANTIC_LAYER_ENABLED='true'; .venv\\Scripts\\python.exe evals\\run_evals.py --limit 5",
+      "status": "passed",
+      "result": "success_rate=1.0, schema_recall_at_5=1.0, retrieval_context_available=true"
+    },
+    {
+      "gate": "retrieval_eval_smoke",
+      "command": "$env:DATABASE_URL='postgresql://text2sql_user:***@localhost:55432/sample_company'; $env:CONNECTION_URLS_JSON='{}'; $env:LLM_PROVIDER='deterministic'; $env:LLM_MODEL='sqlgenx-fixture-v1'; $env:RAG_EMBEDDING_LOCAL_ONLY='true'; $env:SEMANTIC_LAYER_ENABLED='true'; .venv\\Scripts\\python.exe evals\\run_evals.py --retrieval-only --limit 20",
+      "status": "passed",
+      "result": "schema_recall_at_5=1.0, schema_ndcg_at_5=0.966, retrieval_context_available=true"
+    },
+    {
+      "gate": "mysql_full_eval_matrix",
+      "command": "$env:DATABASE_URL='mysql+pymysql://text2sql_user:***@localhost:3307/sample_company?charset=utf8mb4'; $env:CONNECTION_URLS_JSON='{}'; $env:LLM_PROVIDER='deterministic'; $env:LLM_MODEL='sqlgenx-fixture-v1'; $env:RAG_EMBEDDING_LOCAL_ONLY='true'; $env:SEMANTIC_LAYER_ENABLED='true'; .venv\\Scripts\\python.exe evals\\run_evals.py --connection-id default",
+      "status": "passed",
+      "result": "60 cases; success_rate=1.0, guardrail_effectiveness=1.0, unsafe_block_rate=1.0, false_block_rate=0.0, execution_error=0, schema_recall_at_5=0.953"
+    },
+    {
+      "gate": "mysql_retrieval_eval_matrix",
+      "command": "$env:DATABASE_URL='mysql+pymysql://text2sql_user:***@localhost:3307/sample_company?charset=utf8mb4'; $env:CONNECTION_URLS_JSON='{}'; $env:LLM_PROVIDER='deterministic'; $env:LLM_MODEL='sqlgenx-fixture-v1'; $env:RAG_EMBEDDING_LOCAL_ONLY='true'; $env:SEMANTIC_LAYER_ENABLED='true'; .venv\\Scripts\\python.exe evals\\run_evals.py --connection-id default --retrieval-only --limit 20",
+      "status": "passed",
+      "result": "20 cases; schema_recall_at_5=0.975, schema_ndcg_at_5=0.899, retrieval_context_available=true"
+    },
+    {
+      "gate": "diff_hygiene",
+      "command": "git diff --check",
+      "status": "passed"
+    }
+  ],
+  "ci_updates": [
+    "Added mysql-integration job with a MySQL 8.4 service and real runtime lifecycle test.",
+    "Added MySQL full eval and retrieval eval runs to the mysql-integration job.",
+    "Added frontend build and Playwright E2E to static-and-unit CI."
+  ],
+  "blocked_or_deferred": [
+    {
+      "gate": "npm_lint",
+      "status": "blocked",
+      "reason": "next lint prompts interactively because the project has no ESLint configuration; no config was generated in this adapter phase."
+    }
+  ],
+  "secret_redaction": {
+    "full_urls_committed": false,
+    "passwords_in_evidence": "redacted"
+  }
+}

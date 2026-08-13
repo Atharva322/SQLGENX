@@ -52,9 +52,28 @@ def _build_engine_kwargs(database_url: str) -> dict:
     connect_args: dict = {}
     if drivername.startswith("postgresql"):
         connect_args["connect_timeout"] = _settings.db_connect_timeout_seconds
+    if drivername.startswith("mysql"):
+        connect_args["connect_timeout"] = _settings.db_connect_timeout_seconds
     if connect_args:
         kwargs["connect_args"] = connect_args
     return kwargs
+
+
+def connection_adapter_key(connection_id: str | None, owner_id: str | None = None) -> str:
+    cid = connection_id or "default"
+    legacy_connections = LegacyEnvConnectionRepository().urls()
+    if cid in legacy_connections:
+        driver = make_url(legacy_connections[cid]).drivername.split("+", 1)[0]
+        if driver in {"postgresql", "postgres"}:
+            return "postgresql"
+        if driver in {"mysql", "mariadb"}:
+            return "mysql"
+        return driver
+    if owner_id:
+        from src.connections.service import get_connection_service
+
+        return get_connection_service().get_runtime_record(owner_id, cid).adapter_key
+    raise ConnectionNotFoundError(f"Connection '{cid}' was not found.")
 
 
 def _engine_cache_key(connection_id: str | None, owner_id: str | None = None) -> str:

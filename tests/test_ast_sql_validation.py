@@ -26,6 +26,8 @@ def _schema() -> dict:
                     {"name": "id", "type": "INTEGER"},
                     {"name": "amount", "type": "NUMERIC"},
                     {"name": "region", "type": "TEXT"},
+                    {"name": "metadata", "type": "JSON"},
+                    {"name": "sale_date", "type": "DATE"},
                 ],
             },
         ]
@@ -112,4 +114,34 @@ def test_normalization_equivalence_and_non_equivalence() -> None:
     assert not are_semantically_duplicate(
         "SELECT amount FROM sales",
         "SELECT region FROM sales",
+    )
+
+
+def test_mysql_dialect_golden_syntax_is_validated() -> None:
+    cases = [
+        "SELECT name FROM employees ORDER BY id LIMIT 5 OFFSET 10",
+        "SELECT DATE_FORMAT(sale_date, '%Y-%m') AS sale_month, SUM(amount) FROM sales GROUP BY sale_month",
+        "SELECT JSON_EXTRACT(metadata, '$.channel') AS channel FROM sales",
+        "SELECT `name` FROM `employees` WHERE `salary` > 100000",
+        "WITH ranked AS (SELECT name, ROW_NUMBER() OVER (ORDER BY salary DESC) AS rn FROM employees) SELECT name FROM ranked WHERE rn <= 5",
+        "SELECT d.name, COUNT(e.id) AS employee_count FROM departments d LEFT JOIN employees e ON e.department_id = d.id GROUP BY d.name",
+        "SELECT region, SUM(amount) AS total_amount FROM sales GROUP BY region",
+    ]
+
+    for sql in cases:
+        result = analyze_sql_ast(sql, _schema(), dialect="mysql")
+        assert result.valid, f"{sql}: {result.reason_codes}"
+
+
+def test_mysql_and_postgres_fingerprints_respect_dialect() -> None:
+    mysql = analyze_sql_ast("SELECT `name` FROM `employees` LIMIT 5", _schema(), dialect="mysql")
+    postgres = analyze_sql_ast('SELECT "name" FROM "employees" LIMIT 5', _schema(), dialect="postgres")
+
+    assert mysql.valid
+    assert postgres.valid
+    assert mysql.normalized_sql != postgres.normalized_sql
+    assert are_semantically_duplicate(
+        "SELECT `name` FROM `employees` LIMIT 5",
+        "select `name` from `employees` limit 5",
+        dialect="mysql",
     )

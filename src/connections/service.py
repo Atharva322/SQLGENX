@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from sqlalchemy import create_engine
 
+from src.adapters.mysql import mysql_adapter
 from src.adapters.postgresql import postgresql_adapter
 from src.config.settings import get_settings
 from src.connections.models import (
@@ -64,6 +65,7 @@ class ConnectionService:
             engine.dispose()
 
     def create(self, owner_id: str, request: ConnectionCreateRequest) -> PublicConnection:
+        adapter = self._adapter(request.adapter_key)
         test_result = self.test(ConnectionTestRequest(adapter_key=request.adapter_key, config=request.config))
         if not test_result.ok:
             return self._failed_public(owner_id, request, test_result)
@@ -75,7 +77,7 @@ class ConnectionService:
             owner_id=owner_id,
             display_name=request.display_name,
             adapter_key=request.adapter_key,
-            dialect="postgres",
+            dialect=adapter.dialect,
             host=request.config.host,
             port=request.config.port,
             database=request.config.database,
@@ -105,7 +107,7 @@ class ConnectionService:
         safe_error_code = existing.safe_error_code
         last_tested_at = existing.last_tested_at
         if config is not None:
-            test_result = self.test(ConnectionTestRequest(adapter_key="postgresql", config=config))
+            test_result = self.test(ConnectionTestRequest(adapter_key=existing.adapter_key, config=config))
             if not test_result.ok:
                 updated = existing.model_copy(
                     update={
@@ -178,9 +180,11 @@ class ConnectionService:
         return self._adapter(record.adapter_key).build_url(config), record.version
 
     def _adapter(self, adapter_key: str):
-        if adapter_key != "postgresql":
-            raise ValueError("Only PostgreSQL runtime connections are supported in Phase 1.")
-        return postgresql_adapter
+        if adapter_key == "postgresql":
+            return postgresql_adapter
+        if adapter_key == "mysql":
+            return mysql_adapter
+        raise ValueError(f"Unsupported adapter: {adapter_key}")
 
     def _failed_public(self, owner_id: str, request: ConnectionCreateRequest, result: ConnectionTestResponse) -> PublicConnection:
         timestamp = now_utc()
@@ -188,7 +192,7 @@ class ConnectionService:
             id=request.id,
             display_name=request.display_name,
             adapter_key=request.adapter_key,
-            dialect="postgres",
+            dialect=self._adapter(request.adapter_key).dialect,
             host=request.config.host,
             port=request.config.port,
             database=request.config.database,
@@ -204,16 +208,19 @@ class ConnectionService:
 
 
 def record_to_config(record: StoredConnection, password: str):
-    from src.connections.models import PostgresConnectionConfig
+    from src.connections.models import MySQLConnectionConfig, PostgresConnectionConfig
 
-    return PostgresConnectionConfig(
-        host=record.host,
-        port=record.port,
-        database=record.database,
-        username=record.username,
-        password=password,
-        tls_mode=record.tls_mode or "prefer",
-    )
+    payload = {
+        "host": record.host,
+        "port": record.port,
+        "database": record.database,
+        "username": record.username,
+        "password": password,
+        "tls_mode": record.tls_mode or "prefer",
+    }
+    if record.adapter_key == "mysql":
+        return MySQLConnectionConfig(**payload)
+    return PostgresConnectionConfig(**payload)
 
 
 _CONNECTION_SERVICE = ConnectionService()

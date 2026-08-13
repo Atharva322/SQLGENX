@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireSession } from "@/lib/auth/session";
 import { createConnection, fetchConnections } from "@/lib/genxsql-api";
-import type { PostgresConnectionConfig } from "@/lib/types/contracts";
+import type { RuntimeConnectionConfig } from "@/lib/types/contracts";
 
 const configSchema = z.object({
   host: z.string().min(1),
@@ -16,6 +16,7 @@ const configSchema = z.object({
 const createSchema = z.object({
   id: z.string().min(3),
   displayName: z.string().min(1),
+  adapterKey: z.enum(["postgresql", "mysql"]),
   config: configSchema
 });
 
@@ -35,9 +36,10 @@ export async function POST(req: Request): Promise<Response> {
     const body = createSchema.parse(await req.json());
     const connection = await createConnection(
       user.userId,
+      body.adapterKey,
       body.id,
       body.displayName,
-      body.config as PostgresConnectionConfig
+      body.config as RuntimeConnectionConfig
     );
     return NextResponse.json(connection);
   } catch (error) {

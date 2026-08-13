@@ -15,6 +15,7 @@ def normalize_sql(sql: str) -> str:
 class QueryContext:
     question: str
     connection_id: str
+    dialect: str
     schema: dict
     schema_fingerprint: str
     trace: RequestTrace

@@ -36,9 +36,22 @@ class PostgresConnectionConfig(BaseModel):
     tls_mode: Literal["disable", "prefer", "require", "verify-ca", "verify-full"] = "prefer"
 
 
+class MySQLConnectionConfig(BaseModel):
+    host: str = Field(min_length=1, max_length=255)
+    port: int = Field(default=3306, ge=1, le=65535)
+    database: str = Field(min_length=1, max_length=128)
+    username: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=1, max_length=1024)
+    tls_mode: Literal["disable", "prefer", "require", "verify-ca", "verify-full"] = "prefer"
+    charset: str = Field(default="utf8mb4", min_length=1, max_length=64)
+
+
+ConnectionConfig = PostgresConnectionConfig | MySQLConnectionConfig
+
+
 class ConnectionTestRequest(BaseModel):
-    adapter_key: Literal["postgresql"]
-    config: PostgresConnectionConfig
+    adapter_key: Literal["postgresql", "mysql"]
+    config: ConnectionConfig
 
 
 class ConnectionCreateRequest(ConnectionTestRequest):
@@ -48,7 +61,7 @@ class ConnectionCreateRequest(ConnectionTestRequest):
 
 class ConnectionUpdateRequest(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=120)
-    config: PostgresConnectionConfig | None = None
+    config: ConnectionConfig | None = None
 
 
 class ConnectionTestResponse(BaseModel):

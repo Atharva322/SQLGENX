@@ -16,6 +16,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.adapters.mysql import mysql_adapter
+from src.adapters.postgresql import postgresql_adapter
+from src.connections.service import DEMO_OWNER_ID
+from src.db.engine import connection_adapter_key
 from src.db.engine import get_session_factory
 from src.db.schema_introspector import get_schema_summary
 from src.services.rag_retriever import rank_context_candidates
@@ -52,10 +56,18 @@ def _normalize_rows(rows: list[dict[str, Any]]) -> list[str]:
     return sorted(canonical_rows)
 
 
-def _run_sql(sql: str) -> list[dict[str, Any]]:
-    SessionLocal = get_session_factory("default")
+def _adapter_for_connection(connection_id: str) -> Any:
+    adapter_key = connection_adapter_key(connection_id, owner_id=DEMO_OWNER_ID)
+    if adapter_key == "mysql":
+        return mysql_adapter
+    return postgresql_adapter
+
+
+def _run_sql(sql: str, connection_id: str) -> list[dict[str, Any]]:
+    adapter = _adapter_for_connection(connection_id)
+    SessionLocal = get_session_factory(connection_id, owner_id=DEMO_OWNER_ID)
     with SessionLocal() as session:
-        session.execute(text("SET TRANSACTION READ ONLY"))
+        adapter.configure_read_only(session)
         result = session.execute(text(sql))
         keys = list(result.keys())
         rows = [dict(zip(keys, row)) for row in result.fetchall()]
@@ -170,6 +182,7 @@ def run_eval_suite(
     dataset_path: Path,
     limit: int | None = None,
     retrieval_only: bool = False,
+    connection_id: str = "default",
 ) -> dict[str, Any]:
     service = QueryService()
     all_cases = [
@@ -225,7 +238,7 @@ def run_eval_suite(
         lambda: {"cases": 0, "success": 0, "hallucination_hits": 0, "hallucination_cases": 0}
     )
 
-    schema = get_schema_summary(connection_id="default")
+    schema = get_schema_summary(connection_id=connection_id, owner_id=DEMO_OWNER_ID)
     schema_tables = schema.get("tables", [])
     feedback_examples = _load_feedback_examples()
     rag_k = max(1, int(service.settings.rag_top_k_schema))
@@ -254,7 +267,11 @@ def run_eval_suite(
             continue
 
         response_model = service.process_question(
-            question=case["question"], session_id="eval_suite", row_limit_override=1000
+            question=case["question"],
+            connection_id=connection_id,
+            session_id="eval_suite",
+            row_limit_override=1000,
+            owner_id=DEMO_OWNER_ID,
         )
         response = response_model.model_dump()
         generated_sql = response["sql"]
@@ -318,7 +335,7 @@ def run_eval_suite(
 
         if expected_sql and expected_sql not in {"UNANSWERABLE", "BLOCKED"}:
             try:
-                expected_rows = _run_sql(expected_sql)
+                expected_rows = _run_sql(expected_sql, connection_id=connection_id)
                 got_rows = response.get("results", [])
                 if _normalize_rows(expected_rows) == _normalize_rows(got_rows):
                     execution_match_hits += 1
@@ -457,6 +474,7 @@ def run_eval_suite(
         "retrieval_context_available": retrieval_context_available,
         "retrieval_only_mode": retrieval_only,
         "limited_cases": limit or total,
+        "connection_id": connection_id,
     }
 
 
@@ -478,10 +496,16 @@ if __name__ == "__main__":
         action="store_true",
         help="Run only retrieval ranking metrics (Recall@K/nDCG@K).",
     )
+    parser.add_argument(
+        "--connection-id",
+        default="default",
+        help="Connection ID to evaluate through.",
+    )
     args = parser.parse_args()
     output = run_eval_suite(
         dataset_path=Path(args.dataset),
         limit=args.limit,
         retrieval_only=args.retrieval_only,
+        connection_id=args.connection_id,
     )
     print(json.dumps(output, indent=2))
