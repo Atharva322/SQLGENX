@@ -145,3 +145,18 @@ def test_mysql_and_postgres_fingerprints_respect_dialect() -> None:
         "select `name` from `employees` limit 5",
         dialect="mysql",
     )
+
+
+def test_tsql_dialect_golden_syntax_is_validated() -> None:
+    cases = [
+        "SELECT TOP 5 name FROM employees ORDER BY id",
+        "SELECT name FROM employees ORDER BY id OFFSET 10 ROWS FETCH NEXT 5 ROWS ONLY",
+        "SELECT [name] FROM [employees] WHERE [salary] > 100000",
+        "WITH ranked AS (SELECT name, ROW_NUMBER() OVER (ORDER BY salary DESC) AS rn FROM employees) SELECT name FROM ranked WHERE rn <= 5",
+        "SELECT d.name, COUNT(e.id) AS employee_count FROM departments d LEFT JOIN employees e ON e.department_id = d.id GROUP BY d.name",
+        "SELECT region, SUM(amount) AS total_amount FROM sales GROUP BY region",
+    ]
+
+    for sql in cases:
+        result = analyze_sql_ast(sql, _schema(), dialect="tsql")
+        assert result.valid, f"{sql}: {result.reason_codes}"

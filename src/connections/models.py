@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.engine.url import URL, make_url
 
 ConnectionVerificationState = Literal["legacy_env", "untested", "verified", "failed"]
@@ -46,12 +46,40 @@ class MySQLConnectionConfig(BaseModel):
     charset: str = Field(default="utf8mb4", min_length=1, max_length=64)
 
 
-ConnectionConfig = PostgresConnectionConfig | MySQLConnectionConfig
+class SQLServerConnectionConfig(BaseModel):
+    host: str = Field(min_length=1, max_length=255)
+    port: int = Field(default=1433, ge=1, le=65535)
+    database: str = Field(min_length=1, max_length=128)
+    username: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=1, max_length=1024)
+    tls_mode: Literal["disable", "require"] = "require"
+    odbc_driver: str = Field(default="ODBC Driver 18 for SQL Server", min_length=1, max_length=128)
+    trust_server_certificate: bool = False
+
+
+ConnectionConfig = PostgresConnectionConfig | MySQLConnectionConfig | SQLServerConnectionConfig
 
 
 class ConnectionTestRequest(BaseModel):
-    adapter_key: Literal["postgresql", "mysql"]
+    adapter_key: Literal["postgresql", "mysql", "sqlserver"]
     config: ConnectionConfig
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_config_for_adapter(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        adapter_key = data.get("adapter_key")
+        config = data.get("config")
+        if not isinstance(config, dict):
+            return data
+        if adapter_key == "postgresql":
+            data["config"] = PostgresConnectionConfig(**config)
+        elif adapter_key == "mysql":
+            data["config"] = MySQLConnectionConfig(**config)
+        elif adapter_key == "sqlserver":
+            data["config"] = SQLServerConnectionConfig(**config)
+        return data
 
 
 class ConnectionCreateRequest(ConnectionTestRequest):
@@ -170,6 +198,8 @@ def _adapter_key(url: URL) -> str:
         return "postgresql"
     if driver in {"mysql", "mariadb"}:
         return "mysql"
+    if driver in {"mssql", "sqlserver"}:
+        return "sqlserver"
     return driver
 
 
@@ -178,6 +208,8 @@ def _dialect(url: URL) -> str:
         return "postgres"
     if _adapter_key(url) == "mysql":
         return "mysql"
+    if _adapter_key(url) == "sqlserver":
+        return "tsql"
     return url.drivername.split("+", 1)[0]
 
 

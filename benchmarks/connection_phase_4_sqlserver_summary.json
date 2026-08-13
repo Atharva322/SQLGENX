@@ -1,0 +1,78 @@
+{
+  "phase": "connection_phase_4_sqlserver",
+  "branch": "feature/connection-phase-4-sqlserver",
+  "adapter": {
+    "key": "sqlserver",
+    "display_name": "SQL Server",
+    "release_state": "experimental",
+    "driver": "pyodbc",
+    "sqlglot_dialect": "tsql",
+    "supported_versions": ["2019", "2022", "Azure SQL Database"],
+    "capabilities": {
+      "read_only_execution": false,
+      "schema_introspection": true,
+      "explain": true,
+      "row_limit": true,
+      "supports_tls": true
+    }
+  },
+  "local_evidence": [
+    {
+      "gate": "focused_adapter_and_dialect_tests",
+      "command": ".venv\\Scripts\\python.exe -m pytest tests/test_connection_adapters.py tests/test_ast_sql_validation.py -q",
+      "status": "passed",
+      "result": "21 passed"
+    },
+    {
+      "gate": "frontend_types",
+      "command": "npx tsc --noEmit",
+      "status": "passed"
+    },
+    {
+      "gate": "backend_fast",
+      "command": ".venv\\Scripts\\python.exe -m pytest -q -m \"not integration and not live\"",
+      "status": "passed",
+      "result": "106 passed, 3 deselected"
+    },
+    {
+      "gate": "python_static",
+      "command": ".venv\\Scripts\\python.exe -m compileall src tests evals benchmarks",
+      "status": "passed"
+    },
+    {
+      "gate": "dependency_resolution",
+      "command": ".venv\\Scripts\\python.exe -m pip install pyodbc==5.2.0",
+      "status": "passed"
+    },
+    {
+      "gate": "diff_hygiene",
+      "command": "git diff --check",
+      "status": "passed"
+    }
+  ],
+  "implemented": [
+    "SQL Server connection config with ODBC driver, encryption mode, and trust-server-certificate fields.",
+    "SQL Server adapter URL construction, engine options, connection test, schema inspection, T-SQL explain hook, and experimental read-only limitation.",
+    "Adapter registry entry hidden from default catalog and exposed only when server-side experimental catalog flag is enabled.",
+    "Adapter-key-aware config coercion so default ports and adapter-specific fields are applied correctly.",
+    "T-SQL AST golden coverage for TOP, OFFSET FETCH, bracket quoting, CTEs, windows, joins, and aggregates."
+  ],
+  "blocked_or_deferred": [
+    {
+      "gate": "real_sqlserver_integration",
+      "status": "deferred",
+      "reason": "No SQL Server CI service/container and ODBC driver stack are configured yet."
+    },
+    {
+      "gate": "verified_read_only_execution",
+      "status": "deferred",
+      "reason": "SQL Server has no portable session-level read-only switch; verification needs a permission-scoped login in real integration infrastructure."
+    },
+    {
+      "gate": "sqlserver_eval_matrix",
+      "status": "deferred",
+      "reason": "Dialect eval promotion requires a real SQL Server fixture and execution-match runner before release_state can move from experimental to verified."
+    }
+  ],
+  "release_recommendation": "Keep SQL Server experimental; do not expose to normal Add Connection flow yet."
+}

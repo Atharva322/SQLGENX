@@ -5,8 +5,16 @@ from fastapi.testclient import TestClient
 
 from src.adapters.base import AdapterCapability, AdapterInfo
 from src.adapters.registry import AdapterRegistry, AdapterRegistryError
+from src.adapters.sqlserver import sqlserver_adapter
 from src.api.main import app
-from src.connections.models import ConnectionNotFoundError, public_connection_from_url
+from src.connections.models import (
+    ConnectionNotFoundError,
+    ConnectionTestRequest,
+    MySQLConnectionConfig,
+    PostgresConnectionConfig,
+    SQLServerConnectionConfig,
+    public_connection_from_url,
+)
 from src.db.engine import resolve_database_url
 from src.db.engine import _safe_connection_error_code
 from src.services.query_service import QueryService
@@ -126,4 +134,49 @@ def test_adapters_endpoint_requires_server_side_experimental_gate(monkeypatch) -
     get_settings.cache_clear()
 
     assert dev_response.status_code == 200
-    assert {item["key"] for item in dev_response.json()["adapters"]} == {"postgresql", "mysql"}
+    assert {item["key"] for item in dev_response.json()["adapters"]} == {"postgresql", "mysql", "sqlserver"}
+
+
+def test_sqlserver_adapter_builds_odbc_url_without_leaking_in_public_catalog() -> None:
+    config = SQLServerConnectionConfig(
+        host="sql.example.com",
+        port=1433,
+        database="warehouse",
+        username="report_user",
+        password="super-secret",
+        tls_mode="require",
+        odbc_driver="ODBC Driver 18 for SQL Server",
+        trust_server_certificate=False,
+    )
+
+    url = sqlserver_adapter.build_url(config)
+    options = sqlserver_adapter.engine_options(5, 10, 1800)
+
+    assert url.startswith("mssql+pyodbc://report_user:super-secret@sql.example.com:1433/warehouse")
+    assert "driver=ODBC+Driver+18+for+SQL+Server" in url
+    assert "Encrypt=yes" in url
+    assert "TrustServerCertificate=no" in url
+    assert options["connect_args"]["timeout"] == 5
+
+
+def test_connection_config_is_coerced_by_adapter_key_defaults() -> None:
+    payload = {
+        "config": {
+            "host": "db.example.com",
+            "database": "warehouse",
+            "username": "report_user",
+            "password": "super-secret",
+        }
+    }
+
+    pg = ConnectionTestRequest(adapter_key="postgresql", **payload)
+    mysql = ConnectionTestRequest(adapter_key="mysql", **payload)
+    sqlserver = ConnectionTestRequest(adapter_key="sqlserver", **payload)
+
+    assert isinstance(pg.config, PostgresConnectionConfig)
+    assert pg.config.port == 5432
+    assert isinstance(mysql.config, MySQLConnectionConfig)
+    assert mysql.config.port == 3306
+    assert isinstance(sqlserver.config, SQLServerConnectionConfig)
+    assert sqlserver.config.port == 1433
+    assert sqlserver.config.odbc_driver == "ODBC Driver 18 for SQL Server"
