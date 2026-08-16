@@ -8,8 +8,9 @@ pydantic-settings==2.1.0
 sqlalchemy==2.0.25
 psycopg2-binary==2.9.9
 PyMySQL==1.1.1
-cryptography==42.0.8
+cryptography==50.0.0
 pyodbc==5.2.0
+snowflake-sqlalchemy==1.11.0
 duckdb==0.10.0
 alembic==1.13.1
 
@@ -38,5 +39,5 @@ pytest==7.4.4
 pytest-asyncio==0.23.3
 httpx==0.26.0
 rich==13.7.0
-requests==2.31.0
+requests==2.34.2
 plotly==5.18.0

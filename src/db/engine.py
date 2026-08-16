@@ -57,6 +57,9 @@ def _build_engine_kwargs(database_url: str) -> dict:
     if drivername.startswith("sqlite"):
         connect_args["check_same_thread"] = False
         connect_args["timeout"] = float(_settings.db_connect_timeout_seconds)
+    if drivername.startswith("snowflake"):
+        connect_args["login_timeout"] = _settings.db_connect_timeout_seconds
+        connect_args["network_timeout"] = _settings.db_connect_timeout_seconds
     if connect_args:
         kwargs["connect_args"] = connect_args
     return kwargs
@@ -75,6 +78,8 @@ def connection_adapter_key(connection_id: str | None, owner_id: str | None = Non
             return "sqlserver"
         if driver == "sqlite":
             return "sqlite"
+        if driver == "snowflake":
+            return "snowflake"
         return driver
     if owner_id:
         from src.connections.service import get_connection_service

@@ -10,6 +10,7 @@ from sqlalchemy import create_engine, text
 
 from src.adapters.base import AdapterCapability, AdapterInfo
 from src.adapters.registry import AdapterRegistry, AdapterRegistryError
+from src.adapters.snowflake import snowflake_adapter
 from src.adapters.sqlite import sqlite_adapter
 from src.adapters.sqlserver import sqlserver_adapter
 from src.api.main import app
@@ -20,6 +21,7 @@ from src.connections.models import (
     MySQLConnectionConfig,
     PostgresConnectionConfig,
     SQLiteConnectionConfig,
+    SnowflakeConnectionConfig,
     SQLServerConnectionConfig,
     public_connection_from_url,
 )
@@ -142,7 +144,13 @@ def test_adapters_endpoint_requires_server_side_experimental_gate(monkeypatch) -
     get_settings.cache_clear()
 
     assert dev_response.status_code == 200
-    assert {item["key"] for item in dev_response.json()["adapters"]} == {"postgresql", "mysql", "sqlserver", "sqlite"}
+    assert {item["key"] for item in dev_response.json()["adapters"]} == {
+        "postgresql",
+        "mysql",
+        "sqlserver",
+        "sqlite",
+        "snowflake",
+    }
 
 
 def test_sqlserver_adapter_builds_odbc_url_without_leaking_in_public_catalog() -> None:
@@ -197,6 +205,61 @@ def test_connection_config_is_coerced_by_adapter_key_defaults() -> None:
     assert sqlite.config.host == "localhost"
     assert sqlite.config.port == 1
     assert sqlite.config.read_only is True
+
+    snowflake = ConnectionTestRequest(
+        adapter_key="snowflake",
+        config={
+            "account_identifier": "acme-dev",
+            "warehouse": "ANALYTICS_WH",
+            "role": "REPORTING_ROLE",
+            "database": "SAMPLE_COMPANY",
+            "schema": "PUBLIC",
+            "username": "report_user",
+            "password": "super-secret",
+        },
+    )
+    assert isinstance(snowflake.config, SnowflakeConnectionConfig)
+    assert snowflake.config.host == "acme-dev.snowflakecomputing.com"
+    assert snowflake.config.port == 443
+    assert snowflake.config.query_timeout_seconds == 30
+
+
+def test_snowflake_adapter_builds_dedicated_account_url_and_options() -> None:
+    config = SnowflakeConnectionConfig(
+        account_identifier="acme-dev",
+        warehouse="ANALYTICS_WH",
+        role="REPORTING_ROLE",
+        database="SAMPLE_COMPANY",
+        schema="PUBLIC",
+        username="report_user",
+        password="super-secret",
+        query_timeout_seconds=45,
+    )
+
+    url = snowflake_adapter.build_url(config)
+    options = snowflake_adapter.engine_options(5, 10, 1800)
+
+    assert url.startswith("snowflake://report_user:super-secret@acme-dev/SAMPLE_COMPANY/PUBLIC")
+    assert "warehouse=ANALYTICS_WH" in url
+    assert "role=REPORTING_ROLE" in url
+    assert "authenticator=snowflake" in url
+    assert "application=SQLGENX" in url
+    assert options["connect_args"]["login_timeout"] == 5
+    assert options["connect_args"]["network_timeout"] == 5
+
+
+def test_snowflake_url_redacts_public_metadata_without_secret() -> None:
+    public = public_connection_from_url(
+        "warehouse",
+        "snowflake://report_user:super-secret@acme-dev/SAMPLE_COMPANY/PUBLIC?warehouse=ANALYTICS_WH",
+    )
+    payload = public.model_dump()
+
+    assert payload["adapter_key"] == "snowflake"
+    assert payload["dialect"] == "snowflake"
+    assert payload["host"] == "acme-dev"
+    assert "super-secret" not in str(payload)
+    assert "snowflake://" not in str(payload).lower()
 
 
 def _workspace_sqlite_allowed_dir() -> Path:

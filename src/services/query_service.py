@@ -12,6 +12,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from src.adapters.mysql import mysql_adapter
 from src.adapters.postgresql import postgresql_adapter
+from src.adapters.snowflake import snowflake_adapter
 from src.adapters.sqlserver import sqlserver_adapter
 from src.adapters.sqlite import sqlite_adapter
 from src.config.settings import get_settings
@@ -244,6 +245,18 @@ class QueryService:
             timeout_ms = max(1, int(timeout_seconds * 1000))
             session.execute(text(f"SET SESSION max_execution_time = {timeout_ms}"))
             return
+        if adapter_key == "snowflake":
+            timeout = max(1, min(int(timeout_seconds), 600))
+            session.execute(text(f"ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = {timeout}"))
+            return
+        if adapter_key == "sqlserver":
+            timeout_ms = max(1, int(timeout_seconds * 1000))
+            session.execute(text(f"SET LOCK_TIMEOUT {timeout_ms}"))
+            return
+        if adapter_key == "sqlite":
+            timeout_ms = max(1, int(timeout_seconds * 1000))
+            session.execute(text(f"PRAGMA busy_timeout = {timeout_ms}"))
+            return
         timeout_ms = max(1, int(timeout_seconds * 1000))
         session.execute(
             text("SELECT set_config('statement_timeout', :timeout_ms, true)"),
@@ -308,6 +321,8 @@ class QueryService:
             return sqlserver_adapter
         if adapter_key == "sqlite":
             return sqlite_adapter
+        if adapter_key == "snowflake":
+            return snowflake_adapter
         return postgresql_adapter
 
     def _schema_coverage_score(

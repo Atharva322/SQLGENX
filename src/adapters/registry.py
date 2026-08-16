@@ -111,5 +111,24 @@ def default_adapter_registry() -> AdapterRegistry:
                     ),
                 ),
             ),
+            AdapterInfo(
+                key="snowflake",
+                display_name="Snowflake",
+                release_state="experimental",
+                sqlglot_dialect="snowflake",
+                driver_name="snowflake-sqlalchemy",
+                default_port=None,
+                supported_server_versions=("current",),
+                capabilities=AdapterCapability(
+                    read_only_execution=False,
+                    schema_introspection=True,
+                    explain=True,
+                    row_limit=True,
+                    supports_tls=True,
+                    notes=(
+                        "Experimental Phase 6 adapter; requires real Snowflake integration, cost-control, cancellation, and dialect eval gates before verification.",
+                    ),
+                ),
+            ),
         ]
     )
