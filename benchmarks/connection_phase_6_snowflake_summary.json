@@ -1,0 +1,80 @@
+{
+  "phase": "connection_phase_6_snowflake",
+  "branch": "feature/connection-phase-6-snowflake",
+  "adapter": {
+    "key": "snowflake",
+    "display_name": "Snowflake",
+    "release_state": "experimental",
+    "driver": "snowflake-sqlalchemy",
+    "sqlglot_dialect": "snowflake",
+    "supported_versions": ["current"],
+    "capabilities": {
+      "read_only_execution": false,
+      "schema_introspection": true,
+      "explain": true,
+      "row_limit": true,
+      "supports_tls": true
+    }
+  },
+  "implemented": [
+    "Snowflake connection config with account identifier, warehouse, optional role, database, schema, username, password authentication, and query timeout.",
+    "Pinned Snowflake SQLAlchemy driver dependency with compatible cryptography and requests versions.",
+    "Snowflake adapter URL construction using the Snowflake SQLAlchemy dialect instead of generic host/port modeling.",
+    "Snowflake engine login/network timeout options and experimental schema inspection, connection test, explain, and session timeout hooks.",
+    "Runtime adapter selection, legacy URL adapter-key detection, and server-side metadata round trip for warehouse, role, schema, authenticator, and query timeout.",
+    "Adapter catalog registration as experimental so normal users do not see Snowflake in the default Add Connection flow.",
+    "Focused tests for config coercion, URL construction, redaction, options, dialect detection, and experimental catalog exposure."
+  ],
+  "local_evidence": [
+    {
+      "gate": "focused_adapter_and_dialect_tests",
+      "command": ".venv\\Scripts\\python.exe -m pytest tests/test_connection_adapters.py tests/test_ast_sql_validation.py -q",
+      "status": "passed",
+      "result": "25 passed"
+    },
+    {
+      "gate": "backend_fast",
+      "command": ".venv\\Scripts\\python.exe -m pytest -q -m \"not integration and not live\"",
+      "status": "passed",
+      "result": "110 passed, 3 deselected"
+    },
+    {
+      "gate": "python_static",
+      "command": ".venv\\Scripts\\python.exe -m compileall src tests evals benchmarks",
+      "status": "passed"
+    },
+    {
+      "gate": "frontend_types",
+      "command": "npx tsc --noEmit",
+      "status": "passed"
+    }
+  ],
+  "blocked_or_deferred": [
+    {
+      "gate": "live_snowflake_integration",
+      "status": "blocked",
+      "reason": "No Snowflake account, warehouse, role, or credentials are available in CI/local evidence for this phase."
+    },
+    {
+      "gate": "verified_read_only_enforcement",
+      "status": "blocked",
+      "reason": "Snowflake read-only enforcement requires a restricted role and live write-bypass tests; the adapter remains experimental."
+    },
+    {
+      "gate": "cost_controls_and_cancellation",
+      "status": "deferred",
+      "reason": "Session statement timeout is wired, but warehouse budget policy, cancellation, and result-spill controls need live Snowflake validation."
+    },
+    {
+      "gate": "snowflake_eval_matrix",
+      "status": "deferred",
+      "reason": "Promotion requires Snowflake-specific eval cases for fully qualified objects, dates, semi-structured data, limits, identifiers, and warehouse behavior."
+    },
+    {
+      "gate": "normal_ui_exposure",
+      "status": "blocked",
+      "reason": "Snowflake is intentionally hidden from the normal Add Connection flow while experimental."
+    }
+  ],
+  "release_recommendation": "Keep Snowflake experimental; expose only through server-side experimental catalog opt-in until live integration, cost-control, read-only, and dialect eval gates pass."
+}

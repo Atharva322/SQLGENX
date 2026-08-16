@@ -7,6 +7,7 @@ from sqlalchemy import create_engine
 
 from src.adapters.mysql import mysql_adapter
 from src.adapters.postgresql import postgresql_adapter
+from src.adapters.snowflake import snowflake_adapter
 from src.adapters.sqlserver import sqlserver_adapter
 from src.adapters.sqlite import sqlite_adapter
 from src.config.settings import get_settings
@@ -86,6 +87,7 @@ class ConnectionService:
             username=request.config.username,
             tls_mode=request.config.tls_mode,
             secret_id=secret_id,
+            adapter_metadata=_adapter_metadata(request.config),
             version=1,
             verification_state="verified",
             health_state="healthy",
@@ -140,6 +142,7 @@ class ConnectionService:
                 "username": config.username if config else existing.username,
                 "tls_mode": config.tls_mode if config else existing.tls_mode,
                 "secret_id": secret_id,
+                "adapter_metadata": _adapter_metadata(config) if config else existing.adapter_metadata,
                 "version": existing.version + 1,
                 "verification_state": verification_state,
                 "health_state": health_state,
@@ -190,6 +193,8 @@ class ConnectionService:
             return sqlserver_adapter
         if adapter_key == "sqlite":
             return sqlite_adapter
+        if adapter_key == "snowflake":
+            return snowflake_adapter
         raise ValueError(f"Unsupported adapter: {adapter_key}")
 
     def _failed_public(self, owner_id: str, request: ConnectionCreateRequest, result: ConnectionTestResponse) -> PublicConnection:
@@ -214,7 +219,13 @@ class ConnectionService:
 
 
 def record_to_config(record: StoredConnection, password: str):
-    from src.connections.models import MySQLConnectionConfig, PostgresConnectionConfig, SQLiteConnectionConfig, SQLServerConnectionConfig
+    from src.connections.models import (
+        MySQLConnectionConfig,
+        PostgresConnectionConfig,
+        SQLiteConnectionConfig,
+        SnowflakeConnectionConfig,
+        SQLServerConnectionConfig,
+    )
 
     payload = {
         "host": record.host,
@@ -230,7 +241,31 @@ def record_to_config(record: StoredConnection, password: str):
         return SQLServerConnectionConfig(**payload)
     if record.adapter_key == "sqlite":
         return SQLiteConnectionConfig(**payload)
+    if record.adapter_key == "snowflake":
+        return SnowflakeConnectionConfig(
+            account_identifier=record.host.removesuffix(".snowflakecomputing.com"),
+            warehouse=str(record.adapter_metadata.get("warehouse", "")),
+            role=record.adapter_metadata.get("role") or None,
+            database=record.database,
+            schema=str(record.adapter_metadata.get("schema", "PUBLIC")),
+            username=record.username,
+            password=password,
+            authenticator=str(record.adapter_metadata.get("authenticator", "snowflake")),
+            query_timeout_seconds=int(record.adapter_metadata.get("query_timeout_seconds", 30)),
+        )
     return PostgresConnectionConfig(**payload)
+
+
+def _adapter_metadata(config) -> dict[str, str | int]:
+    if hasattr(config, "warehouse"):
+        return {
+            "warehouse": config.warehouse,
+            "role": config.role or "",
+            "schema": config.schema_name,
+            "authenticator": config.authenticator,
+            "query_timeout_seconds": config.query_timeout_seconds,
+        }
+    return {}
 
 
 _CONNECTION_SERVICE = ConnectionService()

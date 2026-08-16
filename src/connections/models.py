@@ -67,11 +67,38 @@ class SQLiteConnectionConfig(BaseModel):
     read_only: bool = True
 
 
-ConnectionConfig = PostgresConnectionConfig | MySQLConnectionConfig | SQLServerConnectionConfig | SQLiteConnectionConfig
+class SnowflakeConnectionConfig(BaseModel):
+    account_identifier: str = Field(min_length=1, max_length=255, pattern=r"^[A-Za-z0-9_.-]+$")
+    warehouse: str = Field(min_length=1, max_length=128)
+    role: str | None = Field(default=None, min_length=1, max_length=128)
+    database: str = Field(min_length=1, max_length=128)
+    schema_name: str = Field(default="PUBLIC", min_length=1, max_length=128, alias="schema")
+    username: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=1, max_length=1024)
+    authenticator: Literal["snowflake"] = "snowflake"
+    query_timeout_seconds: int = Field(default=30, ge=1, le=600)
+    tls_mode: Literal["require"] = "require"
+
+    @property
+    def host(self) -> str:
+        return f"{self.account_identifier}.snowflakecomputing.com"
+
+    @property
+    def port(self) -> int:
+        return 443
+
+
+ConnectionConfig = (
+    PostgresConnectionConfig
+    | MySQLConnectionConfig
+    | SQLServerConnectionConfig
+    | SQLiteConnectionConfig
+    | SnowflakeConnectionConfig
+)
 
 
 class ConnectionTestRequest(BaseModel):
-    adapter_key: Literal["postgresql", "mysql", "sqlserver", "sqlite"]
+    adapter_key: Literal["postgresql", "mysql", "sqlserver", "sqlite", "snowflake"]
     config: ConnectionConfig
 
     @model_validator(mode="before")
@@ -91,6 +118,8 @@ class ConnectionTestRequest(BaseModel):
             data["config"] = SQLServerConnectionConfig(**config)
         elif adapter_key == "sqlite":
             data["config"] = SQLiteConnectionConfig(**config)
+        elif adapter_key == "snowflake":
+            data["config"] = SnowflakeConnectionConfig(**config)
         return data
 
 
@@ -128,6 +157,7 @@ class StoredConnection(BaseModel):
     last_tested_at: str | None = None
     schema_fingerprint: str | None = None
     safe_error_code: ConnectionErrorCode | None = None
+    adapter_metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: str
     updated_at: str
 
@@ -214,6 +244,8 @@ def _adapter_key(url: URL) -> str:
         return "sqlserver"
     if driver == "sqlite":
         return "sqlite"
+    if driver == "snowflake":
+        return "snowflake"
     return driver
 
 
@@ -226,6 +258,8 @@ def _dialect(url: URL) -> str:
         return "tsql"
     if _adapter_key(url) == "sqlite":
         return "sqlite"
+    if _adapter_key(url) == "snowflake":
+        return "snowflake"
     return url.drivername.split("+", 1)[0]
 
 
