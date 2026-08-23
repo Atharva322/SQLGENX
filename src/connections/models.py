@@ -8,6 +8,7 @@ from sqlalchemy.engine.url import URL, make_url
 
 ConnectionVerificationState = Literal["legacy_env", "untested", "verified", "failed"]
 ConnectionHealthState = Literal["unknown", "healthy", "unhealthy"]
+ConnectionPrepareStatus = Literal["not_started", "preparing", "ready", "failed", "stale"]
 ConnectionErrorCode = Literal[
     "invalid_config",
     "destination_blocked",
@@ -137,6 +138,18 @@ class ConnectionTestResponse(BaseModel):
     ok: bool
     safe_error_code: ConnectionErrorCode | None = None
     schema_fingerprint: str | None = None
+
+
+class ConnectionPrepareResponse(BaseModel):
+    connection_id: str
+    owner_id: str
+    ready: bool
+    status: ConnectionPrepareStatus
+    schema_fingerprint: str | None = None
+    table_count: int = 0
+    prepared_at: str | None = None
+    elapsed_ms: int | None = None
+    safe_error_code: ConnectionErrorCode | None = None
 
 
 class StoredConnection(BaseModel):

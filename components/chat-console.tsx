@@ -70,6 +70,9 @@ export function ChatConsole(): React.JSX.Element {
   const [connectionBusy, setConnectionBusy] = useState(false);
   const [generated, setGenerated] = useState<GenerateSqlResponse | null>(null);
   const [executed, setExecuted] = useState<ExecuteSqlResponse | null>(null);
+  const [schemaReady, setSchemaReady] = useState(false);
+  const [schemaPreparing, setSchemaPreparing] = useState(false);
+  const [schemaPrepareError, setSchemaPrepareError] = useState<string>();
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string>();
@@ -143,10 +146,20 @@ export function ChatConsole(): React.JSX.Element {
     const loaded = Array.isArray(data.connections) ? (data.connections as PublicConnection[]) : [];
     setConnections(loaded);
     const preferred = nextSelectedId ?? selectedConnectionId;
+    let nextConnectionId: string | undefined;
     if (loaded.some((connection) => connection.id === preferred)) {
       setSelectedConnectionId(preferred);
+      nextConnectionId = preferred;
     } else if (loaded.length > 0) {
       setSelectedConnectionId(loaded[0].id);
+      nextConnectionId = loaded[0].id;
+    }
+    if (nextConnectionId) {
+      try {
+        await prepareSchema(nextConnectionId);
+      } catch (err) {
+        setSchemaPrepareError(err instanceof Error ? err.message : "Schema preparation failed.");
+      }
     }
   }
 
@@ -155,6 +168,39 @@ export function ChatConsole(): React.JSX.Element {
     setGenerated(null);
     setExecuted(null);
     setPage(0);
+    prepareSchema(connectionId).catch((err) => {
+      setSchemaReady(false);
+      setSchemaPrepareError(err instanceof Error ? err.message : "Schema preparation failed.");
+    });
+  }
+
+  async function prepareSchema(connectionId: string): Promise<void> {
+    if (!connectionId) {
+      setSchemaReady(false);
+      return;
+    }
+    setSchemaPreparing(true);
+    setSchemaReady(false);
+    setSchemaPrepareError(undefined);
+    try {
+      const response = await fetch(`/api/connections/${encodeURIComponent(connectionId)}/prepare`, {
+        method: "POST",
+        cache: "no-store"
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error ?? "Schema preparation failed.");
+      }
+      setSchemaReady(Boolean(data.ready));
+      if (!data.ready) {
+        setSchemaPrepareError(data.safeErrorCode ?? data.status ?? "Schema preparation failed.");
+      }
+    } catch (err) {
+      setSchemaReady(false);
+      throw err;
+    } finally {
+      setSchemaPreparing(false);
+    }
   }
 
   async function onTestConnection(): Promise<void> {
@@ -220,6 +266,7 @@ export function ChatConsole(): React.JSX.Element {
       if (!response.ok) {
         throw new Error(data.error ?? "Failed to refresh schema.");
       }
+      await prepareSchema(selectedConnectionId);
       await loadConnections(selectedConnectionId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to refresh schema.");
@@ -336,6 +383,9 @@ export function ChatConsole(): React.JSX.Element {
           <span style={{ color: "var(--ink-soft)" }}>
             {selectedConnection?.adapterKey ?? "adapter"} · v{selectedConnection?.version ?? 1}
           </span>
+          <span className={`pill ${schemaReady ? "ok" : schemaPrepareError ? "error" : "warn"}`}>
+            {schemaPreparing ? "preparing schema" : schemaReady ? "schema ready" : "schema not ready"}
+          </span>
           <button className="secondary" disabled={connectionBusy} onClick={onRefreshSchema}>
             Refresh Schema
           </button>
@@ -351,10 +401,14 @@ export function ChatConsole(): React.JSX.Element {
             onChange={(e) => setQuestion(e.target.value)}
           />
           <div className="row">
-            <button disabled={loading || question.trim().length < 3 || !selectedConnectionId} onClick={onGenerate}>
-              {loading ? "Generating..." : "Generate SQL"}
+            <button
+              disabled={loading || question.trim().length < 3 || !selectedConnectionId || schemaPreparing || !schemaReady}
+              onClick={onGenerate}
+            >
+              {loading ? "Generating..." : schemaPreparing ? "Preparing..." : "Generate SQL"}
             </button>
             {conversationId ? <span style={{ color: "var(--ink-soft)" }}>Conversation: {conversationId}</span> : null}
+            {schemaPrepareError ? <span style={{ color: "var(--ink-soft)" }}>{schemaPrepareError}</span> : null}
           </div>
         </div>
       </div>

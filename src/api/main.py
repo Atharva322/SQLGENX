@@ -7,11 +7,13 @@ from src.config.settings import get_settings
 from src.connections.models import (
     ConnectionCreateRequest,
     ConnectionNotFoundError,
+    ConnectionPrepareResponse,
     ConnectionTestRequest,
     ConnectionTestResponse,
     ConnectionUpdateRequest,
     PublicConnection,
 )
+from src.connections.prepare import get_connection_prepare_service
 from src.connections.service import DEMO_OWNER_ID, get_connection_service
 from src.db.engine import connections_health
 from src.db.schema_introspector import get_schema_summary, refresh_schema_summary
@@ -28,6 +30,7 @@ from src.models.schemas import (
 )
 from src.services.query_service import QueryService
 from src.runtime.async_runtime import AsyncRuntimeOverloaded, AsyncRuntimeTimeout, close_query_runtime
+from src.utils.audit import log_execution_event
 
 service = QueryService()
 
@@ -45,6 +48,19 @@ def _connection_not_found(exc: Exception) -> HTTPException:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if get_settings().prepare_default_connection_on_startup:
+        try:
+            get_connection_prepare_service().prepare(DEMO_OWNER_ID, "default")
+        except Exception:
+            log_execution_event(
+                "schema_prepare_failed",
+                {
+                    "connection_id": "default",
+                    "owner_id": DEMO_OWNER_ID,
+                    "safe_error_code": "introspection_failed",
+                    "startup": True,
+                },
+            )
     yield
     await close_query_runtime()
     service.llm.close()
@@ -61,6 +77,31 @@ def health() -> dict[str, str]:
 @app.post("/v1/query", response_model=QueryResponse)
 async def query(payload: QueryRequest, owner_id: str = Depends(_owner_id)) -> QueryResponse:
     row_limit = payload.options.row_limit if payload.options else None
+    connection_id = payload.connection_id or "default"
+    if get_settings().require_prepared_schema_context:
+        try:
+            prepared = get_connection_prepare_service().get_status(owner_id, connection_id)
+        except ConnectionNotFoundError as exc:
+            raise _connection_not_found(exc) from exc
+        if not prepared.ready:
+            log_execution_event(
+                "query_blocked_schema_not_ready",
+                {
+                    "connection_id": prepared.connection_id,
+                    "owner_id": owner_id,
+                    "status": prepared.status,
+                    "schema_fingerprint": prepared.schema_fingerprint,
+                },
+            )
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "schema_not_ready",
+                    "connection_id": prepared.connection_id,
+                    "status": prepared.status,
+                    "message": "Schema context is still preparing. Retry after preparation completes.",
+                },
+            )
     try:
         return await service.process_question_async(
             payload.question,
@@ -158,6 +199,7 @@ def create_connection(
                 "safe_error_code": connection.safe_error_code,
             },
         )
+    get_connection_prepare_service().prepare(owner_id, connection.id)
     return connection
 
 
@@ -185,7 +227,11 @@ def update_connection(
     owner_id: str = Depends(_owner_id),
 ) -> PublicConnection:
     try:
-        return get_connection_service().update(owner_id, connection_id, payload)
+        connection = get_connection_service().update(owner_id, connection_id, payload)
+        get_connection_prepare_service().invalidate(owner_id, connection_id)
+        if connection.verification_state == "verified":
+            get_connection_prepare_service().prepare(owner_id, connection.id)
+        return connection
     except ConnectionNotFoundError as exc:
         raise _connection_not_found(exc) from exc
     except ValueError as exc:
@@ -195,7 +241,9 @@ def update_connection(
 @app.delete("/v1/connections/{connection_id}", response_model=PublicConnection)
 def delete_connection(connection_id: str, owner_id: str = Depends(_owner_id)) -> PublicConnection:
     try:
-        return get_connection_service().delete(owner_id, connection_id)
+        connection = get_connection_service().delete(owner_id, connection_id)
+        get_connection_prepare_service().invalidate(owner_id, connection_id)
+        return connection
     except ConnectionNotFoundError as exc:
         raise _connection_not_found(exc) from exc
 
@@ -216,9 +264,34 @@ def refresh_connection_schema(
 ) -> SchemaResponse:
     try:
         summary = refresh_schema_summary(connection_id=connection_id, owner_id=owner_id)
+        get_connection_prepare_service().invalidate(owner_id, connection_id)
+        get_connection_prepare_service().prepare(owner_id, connection_id)
     except ConnectionNotFoundError as exc:
         raise _connection_not_found(exc) from exc
     return SchemaResponse(tables=summary.get("tables", []))
+
+
+@app.get("/v1/connections/{connection_id}/prepare", response_model=ConnectionPrepareResponse)
+def connection_prepare_status(
+    connection_id: str,
+    owner_id: str = Depends(_owner_id),
+) -> ConnectionPrepareResponse:
+    try:
+        return get_connection_prepare_service().get_status(owner_id, connection_id)
+    except ConnectionNotFoundError as exc:
+        raise _connection_not_found(exc) from exc
+
+
+@app.post("/v1/connections/{connection_id}/prepare", response_model=ConnectionPrepareResponse)
+def prepare_connection(
+    connection_id: str,
+    refresh: bool = Query(default=False),
+    owner_id: str = Depends(_owner_id),
+) -> ConnectionPrepareResponse:
+    try:
+        return get_connection_prepare_service().prepare(owner_id, connection_id, refresh=refresh)
+    except ConnectionNotFoundError as exc:
+        raise _connection_not_found(exc) from exc
 
 
 @app.get("/v1/adapters", response_model=AdapterCatalogResponse)

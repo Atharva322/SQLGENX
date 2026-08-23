@@ -101,6 +101,18 @@ export interface ConnectionTestResult {
   schemaFingerprint?: string | null;
 }
 
+export interface ConnectionPrepareStatus {
+  connectionId: string;
+  ownerId: string;
+  ready: boolean;
+  status: "not_started" | "preparing" | "ready" | "failed" | "stale";
+  schemaFingerprint?: string | null;
+  tableCount: number;
+  preparedAt?: string | null;
+  elapsedMs?: number | null;
+  safeErrorCode?: string | null;
+}
+
 export interface HistoryEntry {
   queryId: string;
   connectionId: string;

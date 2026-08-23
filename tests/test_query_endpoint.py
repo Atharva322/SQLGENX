@@ -1,7 +1,17 @@
 from fastapi.testclient import TestClient
+import pytest
 
+from src.api import main as api_main
 from src.api.main import app
+from src.config.settings import get_settings
 from src.runtime.async_runtime import AsyncRuntimeOverloaded, AsyncRuntimeTimeout
+
+
+@pytest.fixture(autouse=True)
+def fast_query_test_settings() -> None:
+    api_main.service.settings.rag_enabled = False
+    api_main.service.settings.async_query_total_timeout_seconds = 120.0
+    get_settings.cache_clear()
 
 
 def test_query_endpoint_returns_response_shape() -> None:

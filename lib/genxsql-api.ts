@@ -1,5 +1,6 @@
 import type {
   AdapterCatalogItem,
+  ConnectionPrepareStatus,
   ConnectionTestResult,
   GenerateSqlResponse,
   PublicConnection,
@@ -33,6 +34,18 @@ type UpstreamAdapter = {
   release_state: "hidden" | "experimental" | "verified";
   default_port?: number | null;
   capabilities?: Record<string, unknown>;
+};
+
+type UpstreamPrepareStatus = {
+  connection_id: string;
+  owner_id: string;
+  ready: boolean;
+  status: "not_started" | "preparing" | "ready" | "failed" | "stale";
+  schema_fingerprint?: string | null;
+  table_count: number;
+  prepared_at?: string | null;
+  elapsed_ms?: number | null;
+  safe_error_code?: string | null;
 };
 
 export function genxsqlApiBaseUrl(): string {
@@ -172,6 +185,30 @@ export async function fetchConnectionSchema(ownerId: string, id: string): Promis
   return schemaFromResponse(response, id, "Failed to load schema.");
 }
 
+export async function prepareConnection(ownerId: string, id: string): Promise<ConnectionPrepareStatus> {
+  const response = await fetch(new URL(`/v1/connections/${encodeURIComponent(id)}/prepare`, genxsqlApiBaseUrl()), {
+    method: "POST",
+    headers: ownerHeaders(ownerId)
+  });
+  const data = await safeJson(response);
+  if (!response.ok) {
+    throw new Error(readError(data, "Failed to prepare schema."));
+  }
+  return mapPrepareStatus(data as UpstreamPrepareStatus);
+}
+
+export async function fetchConnectionPrepareStatus(ownerId: string, id: string): Promise<ConnectionPrepareStatus> {
+  const response = await fetch(new URL(`/v1/connections/${encodeURIComponent(id)}/prepare`, genxsqlApiBaseUrl()), {
+    headers: ownerHeaders(ownerId),
+    cache: "no-store"
+  });
+  const data = await safeJson(response);
+  if (!response.ok) {
+    throw new Error(readError(data, "Failed to load schema preparation status."));
+  }
+  return mapPrepareStatus(data as UpstreamPrepareStatus);
+}
+
 export async function runGenxsqlQuery(
   ownerId: string,
   question: string,
@@ -272,6 +309,20 @@ function mapConnection(connection: UpstreamConnection): PublicConnection {
     version: connection.version ?? 1,
     createdAt: connection.created_at,
     updatedAt: connection.updated_at
+  };
+}
+
+function mapPrepareStatus(status: UpstreamPrepareStatus): ConnectionPrepareStatus {
+  return {
+    connectionId: status.connection_id,
+    ownerId: status.owner_id,
+    ready: Boolean(status.ready),
+    status: status.status,
+    schemaFingerprint: status.schema_fingerprint ?? null,
+    tableCount: Number(status.table_count ?? 0),
+    preparedAt: status.prepared_at ?? null,
+    elapsedMs: typeof status.elapsed_ms === "number" ? status.elapsed_ms : null,
+    safeErrorCode: status.safe_error_code ?? null
   };
 }
 

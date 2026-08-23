@@ -104,6 +104,13 @@ class Settings(BaseSettings):
     async_query_retry_after_seconds: int = Field(
         default=2, alias="ASYNC_QUERY_RETRY_AFTER_SECONDS"
     )
+    require_prepared_schema_context: bool = Field(default=False, alias="REQUIRE_PREPARED_SCHEMA_CONTEXT")
+    prepare_default_connection_on_startup: bool = Field(default=False, alias="PREPARE_DEFAULT_CONNECTION_ON_STARTUP")
+    schema_prepare_warmup_prompts: str = Field(
+        default="List departments|Show total sales by region|Count employees by department",
+        alias="SCHEMA_PREPARE_WARMUP_PROMPTS",
+    )
+    schema_prepare_timeout_seconds: float = Field(default=120.0, alias="SCHEMA_PREPARE_TIMEOUT_SECONDS")
     provider_timeout_seconds: float = Field(default=20.0, alias="PROVIDER_TIMEOUT_SECONDS")
     retrieval_timeout_seconds: float = Field(default=5.0, alias="RETRIEVAL_TIMEOUT_SECONDS")
     explain_timeout_seconds: float = Field(default=5.0, alias="EXPLAIN_TIMEOUT_SECONDS")
