@@ -68,6 +68,38 @@ Services:
 - Postgres: `localhost:5432`
 - Benchmark Postgres: `localhost:55432`
 
+## MCP Interface (Claude Desktop, Claude Code, Cursor)
+
+The same guarded pipeline behind `POST /v1/query` is exposed over the
+[Model Context Protocol](https://modelcontextprotocol.io) with five tools: `query`,
+`get_schema`, `list_connections`, `submit_feedback`, and `get_history`. Every guardrail
+(DDL/DML blocking, AST validation, LIMIT enforcement, EXPLAIN thresholds, hallucination
+scoring, async runtime limits) applies unchanged.
+
+Two transports ship:
+
+- **stdio** for local desktop clients: `python -m src.mcp`
+- **Streamable HTTP** served by the API at `POST /mcp` (same process and port as REST)
+
+Claude Desktop config:
+
+```json
+{
+  "mcpServers": {
+    "sqlgenx": {
+      "command": "/path/to/SQLGENX/.venv/bin/python",
+      "args": ["-m", "src.mcp"],
+      "cwd": "/path/to/SQLGENX",
+      "env": { "DATABASE_URL": "postgresql://...", "MCP_OWNER_ID": "demo" }
+    }
+  }
+}
+```
+
+Set `MCP_OWNER_ID` to choose which owner's connections the server sees (defaults to the demo
+owner). See [docs/mcp.md](docs/mcp.md) for tool arguments, response trimming, error mapping,
+Claude Code / HTTP client setup, and Docker notes.
+
 ## Multi-Database Connection Selector
 
 Configure one default DB and optional named connections in `.env.local`:

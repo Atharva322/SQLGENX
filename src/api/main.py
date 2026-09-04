@@ -15,6 +15,7 @@ from src.connections.models import (
 from src.connections.service import DEMO_OWNER_ID, get_connection_service
 from src.db.engine import connections_health
 from src.db.schema_introspector import get_schema_summary, refresh_schema_summary
+from src.mcp.server import MCP_HTTP_PATH, StreamableHttpTransport, mcp as mcp_server
 from src.models.schemas import (
     AdapterCatalogResponse,
     ConnectionsHealthResponse,
@@ -31,6 +32,10 @@ from src.runtime.async_runtime import AsyncRuntimeOverloaded, AsyncRuntimeTimeou
 
 service = QueryService()
 
+# The MCP server is a thin adapter over ``service`` (resolved lazily from this module), so
+# MCP clients and REST clients share one schema cache, RAG index, history, and async runtime.
+mcp_http_transport = StreamableHttpTransport(mcp_server)
+
 
 def _owner_id(x_owner_id: str | None = Header(default=None)) -> str:
     return x_owner_id.strip() if x_owner_id and x_owner_id.strip() else DEMO_OWNER_ID
@@ -45,12 +50,19 @@ def _connection_not_found(exc: Exception) -> HTTPException:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    yield
+    # The streamable HTTP MCP transport needs its session manager running for the app's lifetime.
+    async with mcp_http_transport.run():
+        yield
     await close_query_runtime()
     service.llm.close()
 
 
 app = FastAPI(title="Text-to-SQL with Guardrails", version="0.2.0", lifespan=lifespan)
+
+# Streamable HTTP MCP endpoint at ``POST /mcp``. Registered as a route rather than a mount so
+# the path is served exactly (a mount would 307-redirect ``/mcp`` to ``/mcp/``, which not
+# every MCP client follows).
+app.add_route(MCP_HTTP_PATH, mcp_http_transport, name="mcp", include_in_schema=False)
 
 
 @app.get("/health")

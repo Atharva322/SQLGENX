@@ -1,8 +1,8 @@
 ﻿# Core Dependencies
-fastapi==0.109.0
-uvicorn[standard]==0.27.0
-pydantic==2.5.3
-pydantic-settings==2.1.0
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+pydantic==2.11.7
+pydantic-settings==2.9.1
 
 # Database
 sqlalchemy==2.0.25
@@ -21,6 +21,9 @@ instructor==0.6.2
 tiktoken==0.6.0
 sentence-transformers==2.3.1
 
+# MCP (Model Context Protocol) interface
+mcp==1.29.1
+
 # Data Processing
 pandas==2.2.0
 numpy==1.26.3
@@ -29,7 +32,7 @@ sqlglot==25.34.1
 
 # API & Web
 streamlit==1.31.0
-python-multipart==0.0.6
+python-multipart==0.0.20
 python-dotenv==1.0.1
 
 # Utilities
@@ -37,7 +40,7 @@ loguru==0.7.2
 PyYAML==6.0.1
 pytest==7.4.4
 pytest-asyncio==0.23.3
-httpx==0.26.0
+httpx==0.28.1
 rich==13.7.0
 requests==2.34.2
 plotly==5.18.0
