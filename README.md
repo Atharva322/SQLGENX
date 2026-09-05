@@ -96,9 +96,13 @@ Claude Desktop config:
 }
 ```
 
+Resources `sqlgenx://connections`, `schema://{connection_id}` and `metrics://semantic` expose
+connections with health, per-connection schema, and the semantic layer as attachable context.
+
 Set `MCP_OWNER_ID` to choose which owner's connections the server sees (defaults to the demo
-owner). See [docs/mcp.md](docs/mcp.md) for tool arguments, response trimming, error mapping,
-Claude Code / HTTP client setup, and Docker notes.
+owner) and `MCP_DEFAULT_CONNECTION_ID` to pick the connection used when a client omits
+`connection_id`. See [docs/mcp.md](docs/mcp.md) for tool arguments, response trimming, error
+mapping, resources, Claude Code / HTTP client setup, and Docker notes.
 
 ## Multi-Database Connection Selector
 

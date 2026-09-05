@@ -190,6 +190,7 @@ async def test_get_schema_returns_tables_list() -> None:
     result = await _call("get_schema", {})
     assert result.isError is False
     assert isinstance(result.structuredContent["tables"], list)
+    assert result.structuredContent["connection_id"] == "default"
 
 
 @pytest.mark.asyncio
@@ -200,15 +201,72 @@ async def test_get_schema_unknown_connection_maps_to_not_found() -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_connections_is_secret_free() -> None:
+async def test_list_connections_is_secret_free_and_reports_health(monkeypatch) -> None:
+    calls: list[dict] = []
+
+    def fake_health(**kwargs):
+        calls.append(kwargs)
+        return {"default": {"healthy": True, "error": ""}}
+
+    monkeypatch.setattr(mcp_server, "connections_health", fake_health)
+    monkeypatch.delenv("MCP_DEFAULT_CONNECTION_ID", raising=False)
+    get_settings.cache_clear()
+
     result = await _call("list_connections", {})
     assert result.isError is False
-    connections = result.structuredContent["connections"]
-    assert any(connection["id"] == "default" for connection in connections)
+    body = result.structuredContent
+    assert body["default_connection_id"] == "default"
+    connections = body["connections"]
+    default = next(connection for connection in connections if connection["id"] == "default")
+    assert default["is_default"] is True
+    assert default["health"] == {"healthy": True, "error": ""}
+    assert calls and calls[0]["owner_id"] == DEMO_OWNER_ID
     serialized = json.dumps(connections).lower()
     assert "password" not in serialized
     assert "postgresql://" not in serialized
     assert "@" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_list_connections_can_skip_health_probe(monkeypatch) -> None:
+    def fail_health(**kwargs):  # pragma: no cover - guard
+        raise AssertionError("health must not be probed when include_health=false")
+
+    monkeypatch.setattr(mcp_server, "connections_health", fail_health)
+    result = await _call("list_connections", {"include_health": False})
+    assert result.isError is False
+    assert all(connection["health"] is None for connection in result.structuredContent["connections"])
+
+
+@pytest.mark.asyncio
+async def test_default_connection_setting_applies_when_id_omitted(monkeypatch) -> None:
+    captured: dict = {}
+
+    async def capture(question, **kwargs):
+        captured.update(kwargs)
+        raise AsyncRuntimeTimeout(timeout_seconds=0.01, stage="total_request")
+
+    monkeypatch.setattr(api_main.service, "process_question_async", capture)
+    monkeypatch.setattr(mcp_server, "connections_health", lambda **kwargs: {})
+
+    monkeypatch.setenv("MCP_DEFAULT_CONNECTION_ID", "local")
+    get_settings.cache_clear()
+    try:
+        await _call("query", {"question": "What is total revenue by region?"})
+        assert captured["connection_id"] == "local"
+
+        # An explicit id always wins over the configured default.
+        await _call("query", {"question": "What is total revenue by region?", "connection_id": "other"})
+        assert captured["connection_id"] == "other"
+
+        listed = await _call("list_connections", {"include_health": False})
+        assert listed.structuredContent["default_connection_id"] == "local"
+        assert all(
+            connection["is_default"] is (connection["id"] == "local")
+            for connection in listed.structuredContent["connections"]
+        )
+    finally:
+        get_settings.cache_clear()
 
 
 @pytest.mark.asyncio
@@ -262,3 +320,60 @@ def test_stdio_entry_point_is_importable() -> None:
     from src.mcp import __main__ as entry
 
     assert callable(entry.main)
+
+
+@pytest.mark.asyncio
+async def test_resources_are_listed(monkeypatch) -> None:
+    async with create_connected_server_and_client_session(mcp_server.mcp) as session:
+        resources = await session.list_resources()
+        templates = await session.list_resource_templates()
+    uris = {str(resource.uri) for resource in resources.resources}
+    assert {"sqlgenx://connections", "metrics://semantic"} <= uris
+    template_uris = {template.uriTemplate for template in templates.resourceTemplates}
+    assert "schema://{connection_id}" in template_uris
+
+
+@pytest.mark.asyncio
+async def test_connections_resource_matches_tool(monkeypatch) -> None:
+    monkeypatch.setattr(
+        mcp_server, "connections_health", lambda **kwargs: {"default": {"healthy": False, "error": "unreachable"}}
+    )
+    async with create_connected_server_and_client_session(mcp_server.mcp) as session:
+        read = await session.read_resource("sqlgenx://connections")
+    content = read.contents[0]
+    assert content.mimeType == "application/json"
+    body = json.loads(content.text)
+    default = next(c for c in body["connections"] if c["id"] == "default")
+    assert default["health"] == {"healthy": False, "error": "unreachable"}
+    assert "postgresql://" not in content.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_schema_resource_reads_connection_schema() -> None:
+    async with create_connected_server_and_client_session(mcp_server.mcp) as session:
+        read = await session.read_resource("schema://default")
+    body = json.loads(read.contents[0].text)
+    assert body["connection_id"] == "default"
+    assert isinstance(body["tables"], list)
+
+
+@pytest.mark.asyncio
+async def test_schema_resource_unknown_connection_is_error() -> None:
+    from mcp.shared.exceptions import McpError
+
+    async with create_connected_server_and_client_session(mcp_server.mcp) as session:
+        with pytest.raises(McpError) as excinfo:
+            await session.read_resource("schema://does-not-exist")
+    assert "connection_not_found" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_semantic_metrics_resource_exposes_definitions() -> None:
+    async with create_connected_server_and_client_session(mcp_server.mcp) as session:
+        read = await session.read_resource("metrics://semantic")
+    body = json.loads(read.contents[0].text)
+    metric_ids = {metric["id"] for metric in body["definition"]["metrics"]}
+    assert "total_revenue" in metric_ids
+    assert body["definition"]["dimensions"]
+    assert "approved_joins" in body["definition"]
+

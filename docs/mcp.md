@@ -36,7 +36,7 @@ balancer without sticky routing.
 | --- | --- | --- |
 | `query` | `question`, `connection_id?`, `session_id?`, `row_limit?` (1-5000), `sql_override?`, `include_meta?` | `QueryService.process_question_async` |
 | `get_schema` | `connection_id?`, `refresh?` | `get_schema_summary` / `refresh_schema_summary` |
-| `list_connections` | none | `ConnectionService.list_public` (secret-free records, same as `GET /v1/connections`) |
+| `list_connections` | `include_health?` (default true) | `ConnectionService.list_public` plus `connections_health` (secret-free records, same as `GET /v1/connections` and `/v1/connections/health`) |
 | `submit_feedback` | `query_id`, `verdict` (`correct` \| `incorrect`), `notes?`, `session_id?` | `QueryService.store_feedback` |
 | `get_history` | `session_id?`, `include_meta?` | `QueryService.get_history` |
 
@@ -77,6 +77,52 @@ and secrets never appear in them.
 Guardrail blocks (for example a `DROP TABLE` request) are **not** errors: they come back as
 a normal result with the block described in `warnings` and `rows_returned: 0`, exactly as
 `POST /v1/query` does.
+
+### Default connection
+
+When a client omits `connection_id`, the tools use `MCP_DEFAULT_CONNECTION_ID` if set,
+otherwise `default` (the same fallback as the REST API). Set it when the `default`
+connection is not the one MCP clients should hit, for example when `default` points at a
+remote database and a local one is registered under another id:
+
+```
+MCP_DEFAULT_CONNECTION_ID=local
+```
+
+`list_connections` reports which id is the default (`default_connection_id`, and
+`is_default` on each record) and probes each connection so an assistant can pick a healthy
+one before asking a question:
+
+```json
+{
+  "default_connection_id": "local",
+  "connections": [
+    {"id": "default", "adapter_key": "postgresql", "host": "db.example.com", "is_default": false,
+     "health": {"healthy": false, "error": "unreachable"}, "...": "..."},
+    {"id": "local", "adapter_key": "postgresql", "host": "localhost", "is_default": true,
+     "health": {"healthy": true, "error": ""}, "...": "..."}
+  ]
+}
+```
+
+Each probe is one connection attempt, so an unreachable host costs up to
+`DB_CONNECT_TIMEOUT_SECONDS`. Pass `include_health: false` to skip the probe.
+
+## Resources
+
+Resources are read-only context an MCP client can attach to a conversation (Claude Desktop
+shows them in the attachment picker). They expose the same information as the tools.
+
+| URI | Content |
+| --- | --- |
+| `sqlgenx://connections` | Connections, default id, and health. Same as `list_connections`. |
+| `schema://{connection_id}` | Tables and columns of one connection, plus its schema fingerprint. Template: substitute an id from `sqlgenx://connections`. |
+| `metrics://semantic` | The semantic layer definition from `SEMANTIC_LAYER_PATH`: metrics (id, version, expression, allowed dimensions and filters, owner, sensitivity, example questions), dimensions, filters, entities and approved joins. |
+
+All three are `application/json`. `metrics://semantic` is the most useful one to attach:
+questions phrased with those metric names and dimensions ("total revenue by region")
+compile to approved SQL deterministically, and the `explanation` field of the `query`
+result says when that happened.
 
 ## Owner identity
 
@@ -180,6 +226,11 @@ docker compose exec -i api python -m src.mcp
   `RAG_ENABLED=false`, or run one warm-up query before handing the server to a client.
 - **`connection_not_found`.** The connection id is not visible to the configured owner.
   Call `list_connections` to see what the server can reach and check `MCP_OWNER_ID`.
+- **`UNANSWERABLE` with an empty `get_schema` result.** The connection the tool used is not
+  reachable, so the generator saw no tables. Check `health` in `list_connections`, point
+  `MCP_DEFAULT_CONNECTION_ID` at a healthy connection or pass `connection_id`, and call
+  `get_schema` with `refresh: true` once the database is up (the empty summary is cached for
+  `SCHEMA_CACHE_TTL_SECONDS`).
 - **Claude Desktop shows the server as disconnected.** Run the same command from a shell
   (`python -m src.mcp`) and read stderr; the JSON-RPC stream is on stdout, so any stray
   stdout output from an imported module breaks the handshake.

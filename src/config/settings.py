@@ -116,6 +116,7 @@ class Settings(BaseSettings):
     sqlite_allowed_directory: str = Field(default=".tmp/sqlite", alias="SQLITE_ALLOWED_DIRECTORY")
 
     mcp_owner_id: str = Field(default="", alias="MCP_OWNER_ID")
+    mcp_default_connection_id: str = Field(default="", alias="MCP_DEFAULT_CONNECTION_ID")
 
     api_host: str = Field(default="0.0.0.0", alias="API_HOST")
     api_port: int = Field(default=8000, alias="API_PORT")

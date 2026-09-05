@@ -17,7 +17,7 @@ from typing import Annotated, Any, Literal
 
 import anyio
 from mcp.server.fastmcp import FastMCP
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.fastmcp.exceptions import ResourceError, ToolError
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import Field
@@ -27,9 +27,11 @@ from starlette.types import Receive, Scope, Send
 from src.config.settings import get_settings
 from src.connections.models import ConnectionNotFoundError
 from src.connections.service import DEMO_OWNER_ID, get_connection_service
+from src.db.engine import connections_health
 from src.db.schema_introspector import get_schema_summary, refresh_schema_summary
 from src.models.schemas import HistoryItem, QueryResponse, SchemaResponse
 from src.runtime.async_runtime import AsyncRuntimeOverloaded, AsyncRuntimeTimeout
+from src.semantic.layer import SemanticLayer
 from src.services.query_service import QueryService
 
 SERVER_NAME = "sqlgenx"
@@ -37,11 +39,16 @@ SERVER_NAME = "sqlgenx"
 INSTRUCTIONS = (
     "SQLGENX turns natural-language questions into read-only SQL, validates it, runs it "
     "against a connected database, and returns rows with a confidence score and warnings. "
-    "Call `list_connections` to discover connection ids, `get_schema` to inspect tables, "
-    "`query` to ask a question, `submit_feedback` to mark a result correct or incorrect, and "
-    "`get_history` to review earlier queries. Every query is guarded: DDL/DML is blocked, "
-    "LIMITs are enforced, and low-confidence or blocked queries are reported in `warnings`."
+    "Call `list_connections` to discover connection ids and their health, `get_schema` to "
+    "inspect tables, `query` to ask a question, `submit_feedback` to mark a result correct or "
+    "incorrect, and `get_history` to review earlier queries. Resources `sqlgenx://connections`, "
+    "`schema://{connection_id}` and `metrics://semantic` expose the same information as "
+    "attachable context; the semantic metrics are the preferred vocabulary for questions. "
+    "Every query is guarded: DDL/DML is blocked, LIMITs are enforced, and low-confidence or "
+    "blocked queries are reported in `warnings`."
 )
+
+FALLBACK_CONNECTION_ID = "default"
 
 # The HTTP transport is served inside the FastAPI app, which the operator deploys behind
 # whatever host name they choose. FastMCP's default enables DNS-rebinding protection that
@@ -183,6 +190,22 @@ def _owner_id() -> str:
     return configured or DEMO_OWNER_ID
 
 
+def _default_connection_id() -> str:
+    """Connection id used when a client omits ``connection_id``.
+
+    Comes from ``MCP_DEFAULT_CONNECTION_ID`` so a deployment whose ``default`` connection is
+    not the one MCP clients should hit (or is unreachable) can steer them without every client
+    having to pass an id. Falls back to ``"default"``, matching the REST API.
+    """
+    configured = str(getattr(get_settings(), "mcp_default_connection_id", "") or "").strip()
+    return configured or FALLBACK_CONNECTION_ID
+
+
+def _resolve_connection_id(connection_id: str | None) -> str:
+    cleaned = (connection_id or "").strip()
+    return cleaned or _default_connection_id()
+
+
 def _tool_error(payload: dict[str, Any]) -> ToolError:
     """Build a ToolError whose message is a machine-readable JSON payload.
 
@@ -238,7 +261,12 @@ async def query(
     question: Annotated[str, Field(min_length=3, description="Natural-language question.")],
     connection_id: Annotated[
         str | None,
-        Field(description="Connection id from `list_connections`. Defaults to 'default'."),
+        Field(
+            description=(
+                "Connection id from `list_connections`. Omit to use the server's default "
+                "connection."
+            )
+        ),
     ] = None,
     session_id: Annotated[
         str | None,
@@ -264,7 +292,7 @@ async def query(
     try:
         response = await _service().process_question_async(
             question,
-            connection_id=connection_id,
+            connection_id=_resolve_connection_id(connection_id),
             session_id=session_id,
             row_limit_override=row_limit,
             sql_override=sql_override,
@@ -304,31 +332,68 @@ async def query(
 )
 async def get_schema(
     connection_id: Annotated[
-        str | None, Field(description="Connection id. Defaults to 'default'.")
+        str | None,
+        Field(description="Connection id. Omit to use the server's default connection."),
     ] = None,
     refresh: Annotated[bool, Field(description="Re-introspect instead of using the cache.")] = False,
 ) -> dict[str, Any]:
-    owner_id = _owner_id()
-    loader = refresh_schema_summary if refresh else get_schema_summary
+    resolved = _resolve_connection_id(connection_id)
     try:
-        summary = await _run_sync(loader, connection_id=connection_id, owner_id=owner_id)
+        return await _schema_payload(resolved, refresh=refresh)
     except ConnectionNotFoundError as exc:
         raise _connection_not_found(exc) from exc
-    return SchemaResponse(tables=summary.get("tables", [])).model_dump(mode="json")
+
+
+async def _schema_payload(connection_id: str, *, refresh: bool = False) -> dict[str, Any]:
+    loader = refresh_schema_summary if refresh else get_schema_summary
+    summary = await _run_sync(loader, connection_id=connection_id, owner_id=_owner_id())
+    payload = SchemaResponse(tables=summary.get("tables", [])).model_dump(mode="json")
+    payload["connection_id"] = connection_id
+    payload["schema_fingerprint"] = summary.get("schema_fingerprint")
+    return payload
+
+
+async def _connections_payload(include_health: bool) -> dict[str, Any]:
+    owner_id = _owner_id()
+    default_id = _default_connection_id()
+    connections = await _run_sync(get_connection_service().list_public, owner_id)
+    health: dict[str, dict[str, Any]] = {}
+    if include_health:
+        try:
+            health = await _run_sync(connections_health, owner_id=owner_id)
+        except TypeError:
+            health = await _run_sync(connections_health)
+    items = []
+    for connection in connections:
+        record = connection.model_dump(mode="json")
+        record["is_default"] = connection.id == default_id
+        record["health"] = health.get(connection.id) if include_health else None
+        items.append(record)
+    return {"default_connection_id": default_id, "connections": items}
 
 
 @mcp.tool(
     name="list_connections",
     title="List database connections",
     description=(
-        "List the database connections available to this server. Records are secret-free: "
+        "List the database connections available to this server, which one is used when "
+        "`connection_id` is omitted (`is_default`), and whether each is reachable (`health`). "
+        "Prefer a connection whose `health.healthy` is true. Records are secret-free: "
         "passwords and connection URLs are never returned."
     ),
 )
-async def list_connections() -> dict[str, Any]:
-    owner_id = _owner_id()
-    connections = await _run_sync(get_connection_service().list_public, owner_id)
-    return {"connections": [connection.model_dump(mode="json") for connection in connections]}
+async def list_connections(
+    include_health: Annotated[
+        bool,
+        Field(
+            description=(
+                "Probe each connection and include `health`. Costs one connection attempt per "
+                "connection; unreachable hosts take up to the connect timeout."
+            )
+        ),
+    ] = True,
+) -> dict[str, Any]:
+    return await _connections_payload(include_health)
 
 
 @mcp.tool(
@@ -378,6 +443,71 @@ async def get_history(
 ) -> dict[str, Any]:
     items = _service().get_history(session_id=session_id)
     return {"items": [_trim_history_item(item, include_meta) for item in items]}
+
+
+# --------------------------------------------------------------------------------------
+# Resources: attachable context for clients (Claude Desktop shows these in the resource
+# picker). They expose the same information as the tools above, read-only.
+# --------------------------------------------------------------------------------------
+
+
+def _json(payload: Any) -> str:
+    return json.dumps(payload, indent=2, sort_keys=True, default=str)
+
+
+@mcp.resource(
+    "sqlgenx://connections",
+    name="connections",
+    title="Database connections",
+    description=(
+        "Connections this server can query, the default connection id, and current health. "
+        "Same content as the `list_connections` tool."
+    ),
+    mime_type="application/json",
+)
+async def connections_resource() -> str:
+    return _json(await _connections_payload(include_health=True))
+
+
+@mcp.resource(
+    "schema://{connection_id}",
+    name="schema",
+    title="Database schema",
+    description=(
+        "Tables and columns of a connection as seen by the SQL generator. Use the connection "
+        "ids from `sqlgenx://connections`."
+    ),
+    mime_type="application/json",
+)
+async def schema_resource(connection_id: str) -> str:
+    try:
+        return _json(await _schema_payload(_resolve_connection_id(connection_id)))
+    except ConnectionNotFoundError as exc:
+        raise ResourceError(_json({"error": "connection_not_found", "message": str(exc)})) from exc
+
+
+@mcp.resource(
+    "metrics://semantic",
+    name="semantic_metrics",
+    title="Semantic layer metrics",
+    description=(
+        "Governed metric, dimension, filter, entity and approved-join definitions from the "
+        "semantic layer. Questions phrased with these metric names and dimensions compile to "
+        "approved SQL deterministically instead of relying on free-form generation."
+    ),
+    mime_type="application/json",
+)
+async def semantic_metrics_resource() -> str:
+    settings = get_settings()
+    path = str(getattr(settings, "semantic_layer_path", "semantic/metrics.yaml"))
+    layer = await _run_sync(SemanticLayer.from_path, path)
+    return _json(
+        {
+            "enabled": bool(getattr(settings, "semantic_layer_enabled", True)),
+            "path": path,
+            "definition": layer.definition.model_dump(mode="json"),
+        }
+    )
 
 
 __all__ = ["MCP_HTTP_PATH", "SERVER_NAME", "StreamableHttpTransport", "mcp"]
